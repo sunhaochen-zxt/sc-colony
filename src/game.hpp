@@ -80,6 +80,8 @@ public:
     const std::string& endReason() const { return endReason_; }
     const std::deque<LogEntry>& log() const { return log_; }
     const std::vector<int>&        assigned() const { return assigned_; }
+    // 本局实际随机种子；0 = 未知（例如对局由存档载入）。仅运行时成员，不写入存档。
+    uint32_t                      seed() const { return seed_; }
     int                idleWorkers() const;   // 已完工建筑用不完的闲置殖民者
 
     TurnReport         evaluate() const;   // 纯预测，不改变状态
@@ -89,6 +91,9 @@ public:
     int                countType(BType t) const;    // 含在建（用于"是否已拥有/禁止重复建造"）
     int                countReady(BType t) const;   // 只数已完工（用于"效果是否生效"）
     bool               buildable(BType t, int x, int y, std::string* why) const;
+    // 纯规则层可建性（地形/占用/前置），**不含**资源是否够付。
+    // 供 preview_build 把「地形不符」与「资源不足」分开回报（契约 §4.6.1 要求两者相互独立）。
+    bool               buildableTerrain(BType t, int x, int y, std::string* why) const;
 
     // ---------------- 界面复用的规则查询（单一事实来源） ----------------
     int                tileOreYield(int x, int y) const { return tile(x, y).richness * MINE_DEPLETION_PER_RICH; }
@@ -154,6 +159,9 @@ private:
     int                           waveIn_ = 8;
     int                           hqId_ = -1;
     std::mt19937                  rng_{1};   // 单一随机流：消耗时机决定后续所有随机结果
+    // 本局种子（仅运行时）。刻意**不**写入存档：存档格式保持与基线逐字节一致，
+    // 0 表示未知（读档后即为 0）。P3 重构存档时再持久化。
+    uint32_t                      seed_ = 0;
     std::deque<LogEntry>          log_;
     std::deque<PendingEvent>      pending_;
     TurnReport                    report_;

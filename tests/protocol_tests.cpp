@@ -565,15 +565,12 @@ static void testLogCodes() {
     check(total > 0, "整局产生了日志");
     check(emptyOk == 0, "不存在渲染为空的 Ok 日志条目");
     check(distinct >= 20, "日志码种类丰富（结构信息未退化为单一码）");
-    // 引擎对局中唯一的兜底：结局说明文本（game.cpp:891 的 log(endReason_)）
-    check(textFallback <= 1, "引擎对局兜底 Text 至多 1 条");
-    bool onlyEndReason = true;
+    // 结局说明已结构化为 ActCode::GameOver
+    //（engine: game.cpp 的 log(ActCode::GameOver, {}, {endReason_})，渲染仍是 endReason_ 原文）。
+    // 因此引擎对局中不再存在兜底 Text 条目：本断言由「至多 1 条」收紧为「必须 0 条」，测试强度不降反升。
+    check(textFallback == 0, "引擎对局无兜底 Text 条目（结局说明已结构化 GameOver）");
     for (const std::string& t : fallbackTexts)
-        if (!g.over() || t != g.endReason()) onlyEndReason = false;
-    check(textFallback == 0 || onlyEndReason,
-          "唯一的兜底日志是结局说明 endReason_（game.cpp:891），非行为回归");
-    if (textFallback > 0)
-        std::printf("      ※ 已知结构缺口（非行为 Bug）：结局说明仍走 Text 兜底\n");
+        std::printf("      ※ 意外出现的兜底 Text：%s\n", t.c_str());
 
     // 兼容层 Text 路径仍可用（UI 层日志）
     Game u;
@@ -581,6 +578,231 @@ static void testLogCodes() {
     u.log("› help");
     check(u.log().back().code == ActCode::Text, "log(std::string) 记为 Text 条目");
     check(u.log().back().text() == "› help", "Text 条目渲染回原文");
+}
+
+// =====================================================================
+//  [H] snapshot.pending（待决事件结构化，P2 §4.4.1）
+// =====================================================================
+
+static void testPendingSnapshot() {
+    std::printf("[H] snapshot.pending：无事件为 null、有事件与 Game::pending() 一致\n");
+
+    Game g;
+    g.newGame(5, "PEND");
+
+    // 无事件：hasPending==false，pending 各字段为空
+    GameSnapshot s0 = g.snapshot();
+    check(!s0.hasPending, "无事件时 snapshot.hasPending==false");
+    check(s0.pending.title.empty() && s0.pending.text.empty() && s0.pending.options.empty(),
+          "无事件时 snapshot.pending 各字段为空");
+
+    // 推进到出现待决事件
+    bool found = false;
+    for (int t = 0; t < MAX_TURNS + 40 && !g.over(); ++t) {
+        g.advanceTurn();
+        if (g.hasPending()) { found = true; break; }
+    }
+    check(found, "窗口内出现待决事件");
+
+    if (found) {
+        const PendingEvent& pe = g.pending();
+        GameSnapshot        s  = g.snapshot();
+        check(s.hasPending, "有事件时 snapshot.hasPending==true");
+        check(s.pending.title == pe.title, "pending.title 与 Game::pending() 一致");
+        check(s.pending.text == pe.text, "pending.text 与 Game::pending() 一致");
+        check(s.pending.options == pe.options, "pending.options 与 Game::pending() 一致");
+        check(!s.pending.options.empty() && s.pending.options.size() == pe.options.size(),
+              "pending.options 条数正确且非空");
+        check(!s.pending.kind.empty() && s.pending.kind != "Unknown",
+              "pending.kind 是已知 ActCode 名字（非 Unknown）");
+        std::printf("      ※ 事件 kind=%s title=%s options=%zu 条\n", s.pending.kind.c_str(),
+                    s.pending.title.c_str(), s.pending.options.size());
+
+        // 应答后 pending 应回到无事件（或事件链的下一个），至少 title 应随状态变化
+        s = g.snapshot();   // 纯查询不影响
+        check(s.hasPending == g.hasPending(), "再次 snapshot 的 hasPending 与引擎一致");
+    }
+}
+
+// =====================================================================
+//  [I] 事件待决期的核心拦截（规则上移 core，P2 §4.4.1 / §4.6）
+// =====================================================================
+
+static void testPendingInterception() {
+    std::printf("[I] 事件待决期：核心拦截除 answer 外的一切操作\n");
+
+    Game g;
+    g.newGame(5, "LOCK");
+    bool found = false;
+    for (int t = 0; t < MAX_TURNS + 40 && !g.over(); ++t) {
+        g.advanceTurn();
+        if (g.hasPending()) { found = true; break; }
+    }
+    check(found, "窗口内出现待决事件");
+    if (!found) return;
+
+    // 五个会改变状态的操作都被核心拦截（参数是否合法都应在 pending 检查之后）
+    const ActionResult rb = g.doBuild("sol", 0, 0);
+    check(!rb.ok && rb.code == ActCode::BlockedByPending, "待决期 doBuild -> BlockedByPending");
+    const ActionResult rd = g.doDemolish(0);
+    check(!rd.ok && rd.code == ActCode::BlockedByPending, "待决期 doDemolish -> BlockedByPending");
+    const ActionResult rt = g.doToggle(0);
+    check(!rt.ok && rt.code == ActCode::BlockedByPending, "待决期 doToggle -> BlockedByPending");
+    const ActionResult rf = g.doFocus(0);
+    check(!rf.ok && rf.code == ActCode::BlockedByPending, "待决期 doFocus -> BlockedByPending");
+    const ActionResult rr = g.doResearch("fusion");
+    check(!rr.ok && rr.code == ActCode::BlockedByPending, "待决期 doResearch -> BlockedByPending");
+    check(rb.text() == "有事件需要先处理（输入选项数字）", "BlockedByPending 渲染固定文案");
+
+    // advanceTurn 在待决期必须完全冻结状态（不推进、不消耗 rng、不改 pending）
+    const GameSnapshot before = g.snapshot();
+    g.advanceTurn();
+    const GameSnapshot after = g.snapshot();
+    check(after.turn == before.turn, "待决期 advanceTurn 不推进周期");
+    check(after.metal == before.metal && after.energy == before.energy && after.food == before.food &&
+              after.science == before.science && after.pop == before.pop && after.morale == before.morale,
+          "待决期 advanceTurn 不改动资源与人口");
+    check(after.hasPending && after.pending.title == before.pending.title &&
+              after.pending.text == before.pending.text && after.pending.options == before.pending.options,
+          "待决期 advanceTurn 不改动 pending");
+    check(after.log.size() == before.log.size(), "待决期 advanceTurn 不产生任何日志");
+
+    // answer 仍然可用（唯一被允许的操作）
+    const ActionResult   ans = g.answer(1);
+    check(ans.ok && ans.code == ActCode::AnswerChoice, "待决期 answer 仍然可用");
+    int guard = 0;
+    while (g.hasPending() && guard++ < 16) g.answer(1);   // 清空事件链
+    const GameSnapshot cleared = g.snapshot();
+    if (!cleared.over) {
+        g.advanceTurn();
+        check(g.turn() != cleared.turn, "应答后 advanceTurn 恢复正常推进");
+    }
+}
+
+// =====================================================================
+//  [J] P2.1：snapshot 新字段（idleWorkers / seed / workerNeed）
+//       与 preview_build 的底层查询（纯查询、buildable/affordable 独立）
+// =====================================================================
+
+static void testNewSnapshotFields() {
+    std::printf("[J] snapshot 新字段：idleWorkers / seed / workerNeed\n");
+
+    Game g;
+    g.newGame(12345, "FIELDS");
+    GameSnapshot s = g.snapshot();
+    check(s.idleWorkers == g.idleWorkers(), "snapshot.idleWorkers 与 Game::idleWorkers() 一致");
+    check(static_cast<uint32_t>(s.seed) == 12345u && g.seed() == 12345u,
+          "snapshot.seed 等于本局实际种子 12345");
+    check(s.seed > 0, "新局 seed > 0（前端据此显示）");
+
+    // workerNeed 逐个建筑与引擎一致
+    auto needMatches = [&](const GameSnapshot& snap) {
+        for (const BuildingView& bv : snap.buildings) {
+            const Building* b = g.building(bv.id);
+            if (!b || bv.workerNeed != g.workerNeed(*b)) return false;
+        }
+        return true;
+    };
+    check(needMatches(s), "buildings[].workerNeed 与 Game::workerNeed() 一致（初始只有 HQ）");
+
+    // 多建几栋后再核对一次（确认不是只对初始建筑成立）
+    for (int y = 0; y < MAP_H; ++y)
+        for (int x = 0; x < MAP_W; ++x) g.doBuild("sol", x, y);
+    for (int y = 0; y < MAP_H; ++y)
+        for (int x = 0; x < MAP_W; ++x) g.doBuild("hab", x, y);
+    const GameSnapshot s2 = g.snapshot();
+    check(needMatches(s2), "建造多栋后 buildings[].workerNeed 仍与引擎一致");
+    std::printf("      ※ 本局 workerNeed: ");
+    for (const BuildingView& bv : s2.buildings) std::printf("#%d=%d ", bv.id, bv.workerNeed);
+    std::printf("\n");
+
+    // 读档后 seed 必须为 0（未知）——存档格式刻意不含种子
+    const std::string p = tmpdir() + "/p21_seed.sav";
+    g.saveTo(p);
+    Game h;
+    check(accepted(h.loadFrom(p)), "P2.1 存档可读入");
+    check(h.snapshot().seed == 0 && h.seed() == 0u, "读档后 snapshot.seed == 0（未知）");
+    check(readAll(p).find("\nseed ") == std::string::npos,
+          "存档文件不含 seed 段（存档格式未变，守住基线红线）");
+}
+
+// preview_build 的规则层语义 + buildable/affordable 相互独立
+static void testPreviewBuildRules() {
+    std::printf("[J2] preview_build 规则层：buildable 与 affordable 相互独立、纯查询\n");
+
+    Game g;
+    g.newGame(7, "INDEP");
+
+    // 坐标越界
+    {
+        std::string why;
+        check(!g.buildableTerrain(BType::Solar, -1, 0, &why) && why == "坐标超出地图范围",
+              "坐标越界 -> buildableTerrain=false 且 reason=坐标超出地图范围");
+        std::string why2;
+        check(!g.buildableTerrain(BType::Solar, 0, MAP_H, &why2) && why2 == "坐标超出地图范围",
+              "y 越界同样报坐标超出地图范围");
+    }
+
+    // 地形不符：钻矿场建在平原上
+    int plainX = -1, plainY = -1;
+    for (int y = 0; y < MAP_H && plainX < 0; ++y)
+        for (int x = 0; x < MAP_W; ++x) {
+            std::string why;
+            if (g.buildableTerrain(BType::Mine, x, y, &why)) continue;   // 矿脉位跳过
+            if (g.tile(x, y).terrain == Terrain::Plain) { plainX = x; plainY = y; break; }
+        }
+    if (plainX >= 0) {
+        std::string why;
+        check(!g.buildableTerrain(BType::Mine, plainX, plainY, &why) &&
+                  why == "钻矿场必须建在金属矿脉上",
+              "地形不符 -> buildableTerrain=false 且 reason=钻矿场必须建在金属矿脉上");
+    } else {
+        check(false, "找到平原用于地形不符验证");
+    }
+
+    // 独立性：把金属花到不足以支付 lab（lab 需 70 金属），规则层仍应可建
+    for (int y = 0; y < MAP_H && g.res().metal >= 70; ++y)
+        for (int x = 0; x < MAP_W && g.res().metal >= 70; ++x) g.doBuild("sol", x, y);
+    int lx = -1, ly = -1;
+    for (int y = 0; y < MAP_H && lx < 0; ++y)
+        for (int x = 0; x < MAP_W; ++x) {
+            std::string why;
+            if (g.buildableTerrain(BType::Lab, x, y, &why)) { lx = x; ly = y; break; }
+        }
+    check(lx >= 0, "找到规则层可建研究所的格子");
+    if (lx >= 0) {
+        std::string whyRules, whyFull;
+        const bool rules = g.buildableTerrain(BType::Lab, lx, ly, &whyRules);
+        const bool full  = g.buildable(BType::Lab, lx, ly, &whyFull);
+        check(rules && !full,
+              "资源不足时：buildableTerrain=true 而 buildable=false（两者相互独立，未被合并）");
+        check(g.res().metal < BDEF[static_cast<size_t>(BType::Lab)].costMetal, "当前金属确实不够付 lab");
+        check(whyFull == "金属不足", "资源不足的原因文案为『金属不足』");
+    }
+}
+
+// 纯查询：连续调用可行性查询不消耗 rng、不改状态（照 P1 [D] 验证 snapshot 纯度的写法）
+static void testPreviewBuildPurity() {
+    std::printf("[J3] preview_build 纯查询：连续调用不耗 rng、不改状态\n");
+
+    Game A, B;
+    A.newGame(2024, "PREVIEW");
+    B.newGame(2024, "PREVIEW");
+
+    // A 每回合做 50 次可行性查询（等价于连续调 50 次 preview_build 的查询部分），B 不做
+    for (int t = 0; t < 60 && !A.over() && !B.over(); ++t) {
+        for (int k = 0; k < 50; ++k) {
+            std::string why;
+            A.buildableTerrain(BType::Mine, k % MAP_W, (k / MAP_W) % MAP_H, &why);
+            A.buildableTerrain(BType::Solar, (k * 3) % MAP_W, (k * 5) % MAP_H, &why);
+        }
+        aiTurn(A);
+        A.advanceTurn();
+        aiTurn(B);
+        B.advanceTurn();
+    }
+    check(canon(A) == canon(B),
+          "每回合查询 50 次的一局与不查询的一局，60 回合后状态逐字一致（未消耗 rng、未改状态）");
 }
 
 // =====================================================================
@@ -595,6 +817,11 @@ int main() {
     testBoundaries();
     testSaveCompat();
     testLogCodes();
+    testPendingSnapshot();
+    testPendingInterception();
+    testNewSnapshotFields();
+    testPreviewBuildRules();
+    testPreviewBuildPurity();
 
     std::printf("==== 共 %d 项检查，失败 %d 项 ====\n", g_checks, g_fail);
     return g_fail ? 1 : 0;

@@ -9,13 +9,16 @@ GAME_SRC := src/main.cpp src/ui.cpp
 
 .PHONY: all clean test run
 
-all: $(BUILD)/starcolony $(BUILD)/selftest $(BUILD)/trace
+all: $(BUILD)/starcolony $(BUILD)/selftest $(BUILD)/trace $(BUILD)/starcolony-rpc
 
 $(BUILD):
 	mkdir -p $(BUILD)
 
 $(BUILD)/starcolony: $(GAME_SRC) $(CORE_SRC) src/game.hpp src/types.hpp src/ui.hpp | $(BUILD)
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) $(GAME_SRC) $(CORE_SRC) -o $@
+
+$(BUILD)/starcolony-rpc: src/rpc_server.cpp $(CORE_SRC) src/game.hpp src/types.hpp src/protocol.hpp src/rpc_json.hpp | $(BUILD)
+	$(CXX) $(CXXFLAGS) $(CPPFLAGS) src/rpc_server.cpp $(CORE_SRC) -o $@
 
 $(BUILD)/selftest: tests/selftest.cpp tests/ai.hpp $(CORE_SRC) src/game.hpp src/types.hpp | $(BUILD)
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) tests/selftest.cpp $(CORE_SRC) -o $@

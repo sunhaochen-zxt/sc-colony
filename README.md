@@ -38,8 +38,8 @@
 
 ```bash
 cd /home/shc/starcolony
-make -j4            # 生成 build/starcolony、build/selftest、build/trace
-./build/starcolony  # 开始游戏
+make -j4            # 生成 build/starcolony、build/starcolony-rpc、build/selftest、build/trace
+./build/starcolony  # 开始游戏（传统 CLI）
 ```
 
 ### 方式二：CMake
@@ -99,21 +99,77 @@ ctest --test-dir build-cmake --output-on-failure
 starcolony/
 ├── README.md              # 本文件：项目门面与快速上手
 ├── docs/
-│   └── MANUAL.md          # 玩家手册：命令、数值表、机制与开局
+│   ├── MANUAL.md          # 玩家手册：命令、数值表、机制与开局
+│   ├── PROTOCOL.md        # 引擎/前端接口契约（冻结版）
+│   ├── QA_REPORT.md       # 对抗性边界测试报告
+│   └── BALANCE.md         # 平衡性扫描与调参建议
 ├── Makefile               # 简易构建：all / test / run / clean
 ├── CMakeLists.txt         # CMake 构建
-├── src/
+├── src/                   # 引擎 core（C++20，无终端依赖）
 │   ├── types.hpp          # 地图尺寸、枚举、地形、静态数据表声明
 │   ├── game.hpp           # Game 状态与规则接口（与界面解耦，可无头测试）
 │   ├── game.cpp           # BDEF / TDEF / WDEF 三张数值表 + 全部核心规则
-│   ├── ui.hpp / ui.cpp    # 终端渲染（地图、资源栏、建筑列表、面板）
-│   └── main.cpp           # 命令行入口、命令解析与帮助文本
-├── tests/
+│   ├── protocol.hpp       # 契约类型：ActCode / LogEntry / ActionResult / GameSnapshot
+│   ├── rpc_json.hpp       # 极简 JSON 读写（自研，保持零依赖）
+│   ├── rpc_server.cpp     # starcolony-rpc：JSON-RPC over stdio 服务端
+│   ├── ui.hpp / ui.cpp    # 传统 CLI 的终端渲染
+│   └── main.cpp           # 传统 CLI 入口、命令解析与帮助文本
+├── frontend/              # 图形化前端（Python + Textual）
+│   ├── starcolony_tui/    # rpc / app / screens / widgets / i18n
+│   └── tests/             # 契约测试与 P1 基线门禁（pytest）
+├── tests/                 # C++ 测试
 │   ├── selftest.cpp       # 无头自检：不变量 + 存档往返 + AI 试玩
-│   └── ai.hpp             # 简易试玩 AI（selftest 与 trace 共用）
+│   ├── edge_tests.cpp     # 对抗性边界测试（存档、命令边界、长局）
+│   ├── protocol_tests.cpp # 结构化协议、快照纯度、待决事件语义
+│   └── ai.hpp             # 简易试玩 AI（selftest / trace / sweep 共用）
 └── tools/
-    └── trace.cpp          # 平衡性调试：用 AI 跑一整局并逐周期打印
+    ├── trace.cpp          # 平衡性调试：用 AI 跑一整局并逐周期打印
+    └── sweep.cpp          # 批量扫描：512 种子胜率与参数敏感性
 ```
+
+## 两种前端
+
+引擎（`src/game.cpp`）不依赖任何界面代码，两个前端都只是它的客户端：
+
+| 前端 | 入口 | 说明 |
+| --- | --- | --- |
+| **图形化 TUI（推荐）** | `PYTHONPATH=frontend .venv/bin/python -m starcolony_tui` | Python + [Textual](https://textual.textualize.io/)，方向键操作地图、建造菜单、事件弹窗、面板切换 |
+| 传统 CLI | `./build/starcolony` | 纯 C++ 打字命令界面，零依赖，保留用于调试与脚本化 |
+
+### 图形化前端
+
+需要 Python 3.11+ 与 `textual`（仓库内已备 `.venv/`）：
+
+```bash
+python3 -m venv .venv && .venv/bin/python -m pip install textual   # 首次
+PYTHONPATH=frontend .venv/bin/python -m starcolony_tui --seed 42
+```
+
+它会自动拉起 `build/starcolony-rpc` 作为子进程（可用 `--rpc` 或环境变量 `STARCOLONY_RPC` 指定路径）。
+操作方式：`↑↓←→` 移动地图光标 · `Enter` 打开建造菜单 · 建筑字形键（`C S G M F H L K T X`）直接在光标处建造 ·
+`Space`/`n` 推进周期 · `F2`~`F5` 切换建筑/科技/日志/帮助面板 · `e` 打开待决事件 · `?` 查看全部快捷键。
+
+> 前端**不做任何规则判定**：能不能建、要花多少、人手够不够，一律问引擎。界面只是呈现层。
+
+## 架构（v2 微内核）
+
+```
+content/            内容数据（后续阶段外置，改数值不重编译）
+src/                引擎 core（C++20，无终端依赖）
+  game.cpp/hpp        规则与状态
+  protocol.hpp        前后端契约的 C++ 侧类型（ActCode / LogEntry / GameSnapshot）
+  rpc_server.cpp      独立进程 starcolony-rpc：JSON-RPC over stdio
+  main.cpp + ui.cpp   传统 CLI（另一个前端）
+frontend/           Textual 前端（Python，独立进程）
+docs/PROTOCOL.md    引擎/前端接口契约（冻结版）
+```
+
+设计要点：
+
+- **规则住在 core**。例如"待决事件期间不允许其它操作"由引擎强制返回 `BlockedByPending`，前端只做体验层的模态拦截，正确性不依赖前端自觉。
+- **前端不做规则运算**。`preview_build` 由引擎回答"能不能建/要多少钱/够不够"，`affordable` 也由服务端算。
+- **可复现**。随机数用单一 `std::mt19937` 并全文入档，`--seed` 可复现同一局；同 seed 同操作的结果完全一致。
+- **行为契约可验证**。`sweep` 用 512 个种子扫描胜率，`trace` 对固定种子逐周期打印，任何改动都要与基线逐字节比对。
 
 ## 设计要点
 
@@ -128,6 +184,7 @@ starcolony/
 | 文档 | 内容 |
 | --- | --- |
 | [docs/MANUAL.md](docs/MANUAL.md) | 玩家手册：完整命令表、建筑表（造价 / 工期 / 工人 / 耗能 / 地形）、科技树、天气修正表、随机事件、虫潮机制、胜负条件、前 10 周期推荐开局 |
+| [docs/PROTOCOL.md](docs/PROTOCOL.md) | 引擎/前端接口契约：JSON-RPC 方法清单、快照字段、事件码语义、两种失败的区分 |
 | [docs/QA_REPORT.md](docs/QA_REPORT.md) | 对抗性边界测试报告：13 个已修缺陷的现象 / 根因 / 修法，ASan+UBSan 结论 |
 | [docs/BALANCE.md](docs/BALANCE.md) | 平衡性扫描报告：512 种子胜率、24 个参数的敏感性分析、调参建议与修订记录 |
 

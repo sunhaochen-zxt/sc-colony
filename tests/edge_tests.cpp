@@ -733,6 +733,9 @@ static void testLongRunAndRoundTrip() {
         g.newGame(7u, "长局");
         int steps = 0;
         for (; steps < 500 && !g.over(); ++steps) {
+            // P2：规则上移 core —— 待决事件期间 advanceTurn 会冻结，必须先应答才能继续推进。
+            // （旧规则「待决也照推」已废弃；这里保持长局推进不崩溃/不变量成立的原有意图。）
+            while (g.hasPending()) g.answer(1);
             g.advanceTurn();
             checkInvariants(g, "long@" + std::to_string(g.turn()));
         }
@@ -791,6 +794,56 @@ static void testLongRunAndRoundTrip() {
 }
 
 // =====================================================================
+//  [7] 待决事件：规则上移 core（docs/PROTOCOL.md §4.4.1）
+//      规则住在 core，前端不得依赖自己的拦截 —— 本组独立于 protocol_tests [I] 再验一遍。
+// =====================================================================
+static void testPendingBlocksCore() {
+    std::printf("[7] 待决事件：六操作拦截 / advance 冻结 / answer 恢复（规则上移 core）\n");
+
+    Game g;
+    g.newGame(5u, "待决");
+    int guard = 0;
+    while (!g.hasPending() && !g.over() && guard++ < TUNE.maxTurns + 10) g.advanceTurn();
+    check(g.hasPending(), "若干周期内出现待决事件");
+    if (!g.hasPending()) { std::printf("    跳过（未造出事件）\n\n"); return; }
+
+    // advanceTurn 必须完全冻结：turn / 所有快照字段 / pending 均不变（不消耗 rng、无副作用）
+    const Snap before = snap(g);
+    const int  turn0  = g.turn();
+    g.advanceTurn();
+    check(g.turn() == turn0, "待决期间 advanceTurn 不推进周期");
+    check(sameSnap(before, snap(g)), "待决期间 advanceTurn 不改变任何快照字段");
+    check(g.hasPending(), "待决期间 advanceTurn 不消耗/改变事件");
+
+    // 五个返回 ActionResult 的行动必须被拦且 code=BlockedByPending，且无副作用
+    auto blocked = [&](const ActionResult& r, const char* what) {
+        check(!r.ok, std::string("待决期间 ") + what + " 被拒绝");
+        check(r.code == ActCode::BlockedByPending,
+              std::string("待决期间 ") + what + " code=BlockedByPending");
+    };
+    blocked(g.doBuild("sol", 0, 0), "build");
+    blocked(g.doDemolish(0), "demolish");
+    blocked(g.doToggle(0), "toggle");
+    blocked(g.doFocus(0), "focus");
+    blocked(g.doResearch("hydro"), "research");
+    // 第六个操作 advanceTurn 返回 void，用「周期是否前进」读出核心的决定
+    g.advanceTurn();
+    check(g.turn() == turn0, "待决期间 advance（第六个操作）亦被拦（turn 不变）");
+    check(sameSnap(before, snap(g)), "被拦的六个操作均无副作用");
+    check(g.hasPending(), "被拦操作不消耗待决事件");
+
+    // answer 不受影响；应答后 advance 恢复推进
+    ActionResult ar = g.answer(1);
+    check(ar.ok && ar.code == ActCode::AnswerChoice, "待决期间 answer(1) 成功");
+    while (g.hasPending()) g.answer(1);   // 应对可能的事件链
+    const int t1 = g.turn();
+    g.advanceTurn();
+    check(g.turn() == t1 + 1, "应答后 advanceTurn 恢复推进");
+
+    std::printf("    完成\n\n");
+}
+
+// =====================================================================
 int main() {
     std::printf("=== 星际争霸：殖民地 对抗性边界测试 (task-2) ===\n");
     std::printf("构建时间: %s %s（被测源码修订哈希见 docs/QA_REPORT.md）\n\n", __DATE__, __TIME__);
@@ -801,6 +854,7 @@ int main() {
     testCommandBoundaries();
     testUnderConstructionEffects();
     testLongRunAndRoundTrip();
+    testPendingBlocksCore();
 
     std::printf("=== 检查 %d 项，失败 %d 项，其中标记缺陷 %d 个 ===\n", g_checks, g_fail, g_bugs);
     std::printf("复现：g++ -std=c++20 -O2 -Isrc tests/edge_tests.cpp src/game.cpp -o /tmp/edge_tests && /tmp/edge_tests\n");

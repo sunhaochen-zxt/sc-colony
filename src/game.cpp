@@ -88,6 +88,24 @@ enum EKind {
 
 std::string num(int v) { return std::to_string(v); }
 
+// EKind -> 协议层 ActCode 名字（供 snapshot.pending.kind 用；前端据 kind 配色/配图标）。
+// 只有 EV_REFUGEES/EV_MARKET/EV_SIGNAL/EV_LIFESUPPORT 会产生待决事件，其余为自动结算，
+// 这里仍全量映射以便将来扩展；未知 kind 回落到 "Unknown"。
+std::string eventKindName(int kind) {
+    switch (kind) {
+    case EV_REFUGEES:    return actCodeName(ActCode::EventRefugees);
+    case EV_MARKET:      return actCodeName(ActCode::EventMarket);
+    case EV_SIGNAL:      return actCodeName(ActCode::EventSignal);
+    case EV_LIFESUPPORT: return actCodeName(ActCode::EventLifeSupport);
+    case EV_METEOR:      return actCodeName(ActCode::EventMeteorHit);
+    case EV_PROSPECT:    return actCodeName(ActCode::EventProspectFound);
+    case EV_VENT:        return actCodeName(ActCode::EventVentFound);
+    case EV_FESTIVAL:    return actCodeName(ActCode::EventFestival);
+    case EV_CARAVAN:     return actCodeName(ActCode::EventCaravan);
+    default:             return "Unknown";
+    }
+}
+
 } // namespace
 
 // =====================================================================
@@ -396,7 +414,9 @@ TurnReport Game::evaluate() const {
 //  行动
 // =====================================================================
 
-bool Game::buildable(BType t, int x, int y, std::string* why) const {
+// 纯规则层可建性：地形 / 占用 / 前置。**不含**资源是否够付——
+// 契约 §4.6.1 要求 preview_build 的 buildable 与 affordable 相互独立，故拆成两层。
+bool Game::buildableTerrain(BType t, int x, int y, std::string* why) const {
     auto fail = [&](const char* msg) { if (why) *why = msg; return false; };
     if (x < 0 || x >= MAP_W || y < 0 || y >= MAP_H) return fail("坐标超出地图范围");
     const Tile& tl = tile(x, y);
@@ -413,6 +433,12 @@ bool Game::buildable(BType t, int x, int y, std::string* why) const {
         if (tl.terrain != Terrain::Plain && tl.terrain != Terrain::Ice)
             return fail("该地形无法建造（只有平原/冰层可建）");
     }
+    return true;
+}
+
+bool Game::buildable(BType t, int x, int y, std::string* why) const {
+    if (!buildableTerrain(t, x, y, why)) return false;
+    auto fail = [&](const char* msg) { if (why) *why = msg; return false; };
     const BDef& d = def(t);
     if (res_.metal < d.costMetal) return fail("金属不足");
     if (res_.energy < d.costEnergy) return fail("能源不足");
@@ -421,6 +447,9 @@ bool Game::buildable(BType t, int x, int y, std::string* why) const {
 }
 
 ActionResult Game::doBuild(const std::string& key, int x, int y) {
+    // 规则上移（P2）：有事件待决时，除 answer 外的一切操作都由核心拦截。
+    // 前端不再各自实现该规则（旧 CLI 的四处 if (g.hasPending()) 只是体验优化）。
+    if (!pending_.empty()) return {false, ActCode::BlockedByPending, {}};
     int idx = -1;
     for (int i = 0; i < BTYPE_COUNT; ++i)
         if (key == BDEF[static_cast<size_t>(i)].key || key == BDEF[static_cast<size_t>(i)].name) idx = i;
@@ -454,6 +483,7 @@ ActionResult Game::doBuild(const std::string& key, int x, int y) {
 }
 
 ActionResult Game::doDemolish(int id) {
+    if (!pending_.empty()) return {false, ActCode::BlockedByPending, {}};
     const Building* bp = building(id);
     if (!bp) return {false, ActCode::DemolishInvalid, {num(id)}};
     if (bp->type == BType::HQ) return {false, ActCode::DemolishHQ, {}};
@@ -473,6 +503,7 @@ ActionResult Game::doDemolish(int id) {
 }
 
 ActionResult Game::doToggle(int id) {
+    if (!pending_.empty()) return {false, ActCode::BlockedByPending, {}};
     const Building* bp = building(id);
     if (!bp) return {false, ActCode::ToggleInvalid, {num(id)}};
     Building& b = blds_[static_cast<size_t>(id)];
@@ -483,6 +514,7 @@ ActionResult Game::doToggle(int id) {
 }
 
 ActionResult Game::doFocus(int id) {
+    if (!pending_.empty()) return {false, ActCode::BlockedByPending, {}};
     const Building* bp = building(id);
     if (!bp) return {false, ActCode::FocusInvalid, {num(id)}};
     priority_.erase(std::remove(priority_.begin(), priority_.end(), id), priority_.end());
@@ -493,6 +525,7 @@ ActionResult Game::doFocus(int id) {
 }
 
 ActionResult Game::doResearch(const std::string& key) {
+    if (!pending_.empty()) return {false, ActCode::BlockedByPending, {}};
     int idx = -1;
     for (int i = 0; i < TECH_COUNT; ++i)
         if (key == TDEF[static_cast<size_t>(i)].key || key == TDEF[static_cast<size_t>(i)].name) idx = i;
@@ -802,6 +835,9 @@ void Game::applyCombat(int strength) {
 
 void Game::advanceTurn() {
     if (over_) return;
+    // 规则上移（P2）：有事件待决时不得推进周期——不消耗 rng、不改动任何状态、pending_ 保持不变。
+    // answer() 是唯一被允许的操作。
+    if (!pending_.empty()) return;
 
     log(ActCode::TurnHeader, {turn_}, {});
 
@@ -888,7 +924,9 @@ void Game::advanceTurn() {
     recomputeWorkers();
 
     checkEnd();
-    if (over_) { log(endReason_); return; }
+    // 结局说明结构化为 GameOver（渲染仍是 endReason_ 原文，与改造前逐字一致），
+    // 使前端能用 code 识别结局那条日志，而不是退化成 Text 兜底。
+    if (over_) { log(ActCode::GameOver, {}, {endReason_}); return; }
 
     // 7) 随机事件
     rollEvent();
@@ -1246,6 +1284,7 @@ GameSnapshot Game::snapshot() const {
         v.alive = b.alive;
         v.assigned = (b.id >= 0 && b.id < static_cast<int>(assigned_.size()))
                          ? assigned_[static_cast<size_t>(b.id)] : 0;
+        v.workerNeed = workerNeed(b);
         s.buildings.push_back(v);
     }
 
@@ -1265,6 +1304,20 @@ GameSnapshot Game::snapshot() const {
         if (hasTech(static_cast<Tech>(i))) s.techs.push_back(TDEF[static_cast<size_t>(i)].key);
 
     s.assigned = assigned_;
+
+    // 待决事件（P2 §4.4.1）：空队列安全，但仍先判 hasPending
+    s.hasPending = !pending_.empty();
+    if (s.hasPending) {
+        const PendingEvent& p = pending_.front();
+        s.pending.kind = eventKindName(p.kind);
+        s.pending.title = p.title;
+        s.pending.text = p.text;
+        s.pending.options = p.options;
+    }
+
+    // ---- P2.1 新增（纯追加）----
+    s.idleWorkers = idleWorkers();          // 纯查询，不耗 rng
+    s.seed        = static_cast<int>(seed_);   // 0 = 未知（读档后）
     return s;
 }
 
@@ -1275,6 +1328,7 @@ GameSnapshot Game::snapshot() const {
 void Game::newGame(uint32_t seed, const std::string& colonyName) {
     name_ = colonyName.empty() ? "新曙光" : colonyName;
     rng_.seed(seed);
+    seed_ = seed;   // 记录本局种子（仅运行时，不入存档）
 
     blds_.clear();
     priority_.clear();

@@ -17,6 +17,10 @@ add_executable(starcolony src/main.cpp src/ui.cpp)
 target_link_libraries(starcolony PRIVATE sc_core)
 target_compile_options(starcolony PRIVATE -Wall -Wextra)
 
+add_executable(starcolony-rpc src/rpc_server.cpp)
+target_link_libraries(starcolony-rpc PRIVATE sc_core)
+target_compile_options(starcolony-rpc PRIVATE -Wall -Wextra)
+
 add_executable(selftest tests/selftest.cpp)
 target_link_libraries(selftest PRIVATE sc_core)
 target_compile_options(selftest PRIVATE -Wall -Wextra)

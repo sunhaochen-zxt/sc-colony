@@ -102,7 +102,92 @@ enum class ActCode : int {
     NewGameText,        // 新局开场白
     GoalText,           // 新局目标
     HintText,           // 新局提示
+    GameOver,           // 结局说明（strings[0] 即 endReason_，渲染与改造前逐字一致）
+    BlockedByPending,   // 有事件待决：该操作被核心拦截（规则住在 core，前端不再各自实现）
 };
+
+// ============================================================
+//  ActCode 的稳定名字（协议用）
+// ============================================================
+// 契约（docs/PROTOCOL.md §3）要求 ActCode 以「枚举名字符串」传输，禁止用整数下标：
+// 枚举会随内容扩展而新增，整数下标会漂移，字符串名稳定、可读、便于前端 switch。
+// 覆盖全部枚举值；default 返回 "Unknown"（新枚举忘记登记时的兜底，不崩溃）。
+inline const char* actCodeName(ActCode c) {
+    switch (c) {
+    case ActCode::Ok:                return "Ok";
+    // 行动结果
+    case ActCode::BuildUnknownType:  return "BuildUnknownType";
+    case ActCode::BuildBlocked:      return "BuildBlocked";
+    case ActCode::BuildStarted:      return "BuildStarted";
+    case ActCode::DemolishInvalid:   return "DemolishInvalid";
+    case ActCode::DemolishHQ:        return "DemolishHQ";
+    case ActCode::DemolishDone:      return "DemolishDone";
+    case ActCode::ToggleInvalid:     return "ToggleInvalid";
+    case ActCode::ToggleDone:        return "ToggleDone";
+    case ActCode::FocusInvalid:      return "FocusInvalid";
+    case ActCode::FocusDone:         return "FocusDone";
+    case ActCode::ResearchUnknown:   return "ResearchUnknown";
+    case ActCode::ResearchDup:       return "ResearchDup";
+    case ActCode::ResearchPrereq:    return "ResearchPrereq";
+    case ActCode::ResearchNoScience: return "ResearchNoScience";
+    case ActCode::ResearchDone:      return "ResearchDone";
+    case ActCode::AnswerNone:        return "AnswerNone";
+    case ActCode::AnswerInvalid:     return "AnswerInvalid";
+    case ActCode::AnswerChoice:      return "AnswerChoice";
+    // 结构化日志
+    case ActCode::Text:              return "Text";
+    case ActCode::TurnHeader:        return "TurnHeader";
+    case ActCode::PopBorn:           return "PopBorn";
+    case ActCode::WeatherChange:     return "WeatherChange";
+    case ActCode::EventRefugees:     return "EventRefugees";
+    case ActCode::EventMarket:       return "EventMarket";
+    case ActCode::EventSignal:       return "EventSignal";
+    case ActCode::EventLifeSupport:  return "EventLifeSupport";
+    case ActCode::EventMeteorHit:    return "EventMeteorHit";
+    case ActCode::EventMeteorMiss:   return "EventMeteorMiss";
+    case ActCode::EventProspectFound:return "EventProspectFound";
+    case ActCode::EventProspectNone: return "EventProspectNone";
+    case ActCode::EventVentFound:    return "EventVentFound";
+    case ActCode::EventVentNone:     return "EventVentNone";
+    case ActCode::EventFestival:     return "EventFestival";
+    case ActCode::EventCaravan:      return "EventCaravan";
+    case ActCode::LogChoice:         return "LogChoice";
+    case ActCode::RefugeesSettled:   return "RefugeesSettled";
+    case ActCode::OvercrowdWarn:     return "OvercrowdWarn";
+    case ActCode::RefugeesPartial:   return "RefugeesPartial";
+    case ActCode::RefugeesRefused:   return "RefugeesRefused";
+    case ActCode::RefugeesSeized:    return "RefugeesSeized";
+    case ActCode::MarketNoMetal:     return "MarketNoMetal";
+    case ActCode::MarketTradeMetal:  return "MarketTradeMetal";
+    case ActCode::MarketNoEnergy:    return "MarketNoEnergy";
+    case ActCode::MarketTradeEnergy: return "MarketTradeEnergy";
+    case ActCode::MarketLeave:       return "MarketLeave";
+    case ActCode::SignalSuccess:     return "SignalSuccess";
+    case ActCode::SignalSwarm:       return "SignalSwarm";
+    case ActCode::SignalIgnore:      return "SignalIgnore";
+    case ActCode::LifeSupportFixed:  return "LifeSupportFixed";
+    case ActCode::LifeSupportPoor:   return "LifeSupportPoor";
+    case ActCode::LifeSupportFail:   return "LifeSupportFail";
+    case ActCode::WaveIncoming:      return "WaveIncoming";
+    case ActCode::WaveRepelled:      return "WaveRepelled";
+    case ActCode::BuildingDamaged:   return "BuildingDamaged";
+    case ActCode::WaveBreached:      return "WaveBreached";
+    case ActCode::Repaired:          return "Repaired";
+    case ActCode::Brownout:          return "Brownout";
+    case ActCode::Starve:            return "Starve";
+    case ActCode::OreDepleted:       return "OreDepleted";
+    case ActCode::BuildingBuilt:     return "BuildingBuilt";
+    case ActCode::OvercrowdLeft:     return "OvercrowdLeft";
+    case ActCode::AcidRain:          return "AcidRain";
+    case ActCode::GateTheoryUnlocked:return "GateTheoryUnlocked";
+    case ActCode::NewGameText:       return "NewGameText";
+    case ActCode::GoalText:          return "GoalText";
+    case ActCode::HintText:          return "HintText";
+    case ActCode::GameOver:          return "GameOver";
+    case ActCode::BlockedByPending:  return "BlockedByPending";
+    }
+    return "Unknown";
+}
 
 // ============================================================
 //  内部：中文渲染（兼容层）
@@ -215,6 +300,7 @@ struct BuildingView {
     bool        enabled = true;
     bool        alive = true;
     int         assigned = 0;    // 已分配工人数
+    int         workerNeed = 0;   // 当前所需工人数（已计入科技修正；0 = 无需工人，前端按“无需工人”处理）
 };
 
 struct TileView {
@@ -222,6 +308,14 @@ struct TileView {
     int ore = 0;
     int richness = 0;
     int building = -1; // 占用该地块的建筑 id，-1 为空
+};
+
+// 待决事件（P2 §4.4.1）：前端渲染事件弹窗的唯一数据来源
+struct PendingView {
+    std::string              kind;     // ActCode 枚举名字符串（如 "EventRefugees"）
+    std::string              title;    // 事件标题
+    std::string              text;     // 事件正文
+    std::vector<std::string> options;  // 选项文案，1 基：options[0] 对应 answer option:1
 };
 
 struct GameSnapshot {
@@ -249,6 +343,13 @@ struct GameSnapshot {
     std::vector<LogEntry>     log;
     std::vector<std::string>  techs;     // 已研究科技的 key 列表
     std::vector<int>          assigned;  // 每个建筑分配到的工人数
+    // 待决事件（P2 §4.4.1）。hasPending 仅作 C++ 侧内部标志，不单独序列化到 JSON；
+    // 序列化层按 hasPending 决定 pending 字段是对象还是 null。
+    bool                      hasPending = false;
+    PendingView               pending;
+    // ---- P2.1 新增（纯追加）----
+    int                       idleWorkers = 0;  // 闲置殖民者数（Game::idleWorkers()，前端不得自行按 pop-Σassigned 估算）
+    int                       seed = 0;         // 本局实际随机种子；0 = 未知（例如对局由存档载入）
 };
 
 // ============================================================
@@ -343,6 +444,10 @@ inline std::string renderLog(ActCode c, const std::vector<long long>& v, const s
     case ActCode::ResearchPrereq:   return actResearchPrereq(sval(s, 0));
     case ActCode::ResearchNoScience:return actResearchNoScience(sval(s, 0), ival(v, 0), ival(v, 1));
     case ActCode::ResearchDone:     return actResearchDone(sval(s, 0), sval(s, 1));
+    // 结局说明：与改造前 log(endReason_) 的兜底文本逐字一致（strings[0] 即原文）
+    case ActCode::GameOver:         return sval(s, 0);
+    // 待决事件拦截：固定文案（成功文案里不带任何参数）
+    case ActCode::BlockedByPending: return "有事件需要先处理（输入选项数字）";
     default:                        return "";
     }
 }
@@ -371,6 +476,7 @@ inline std::string renderAction(ActCode c, const std::vector<std::string>& a) {
     case ActCode::AnswerNone:       return "当前没有待处理事件";
     case ActCode::AnswerInvalid:    return "无效选项，请输入 1-" + sval(a, 0);
     case ActCode::AnswerChoice:     return "选择：" + sval(a, 0);
+    case ActCode::BlockedByPending: return "有事件需要先处理（输入选项数字）";
     default:                        return "";
     }
 }
