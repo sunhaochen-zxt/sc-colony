@@ -336,7 +336,7 @@ std::string renderFrame(const Game& g, const std::string& prompt, const std::vec
         if (b.alive) blds.push_back(buildingLine(g, b));
 
     std::vector<std::string> msgs;
-    for (const std::string& m : g.log()) msgs.push_back("  " + m);
+    for (const LogEntry& m : g.log()) msgs.push_back("  " + m.text());
 
     // 不按终端高度截断：建筑 / 消息 / 信息面板一律完整输出。
     // 放不下就让终端自己滚动，绝不用「…另有 N 项」把内容藏起来。

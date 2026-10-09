@@ -157,7 +157,10 @@ int Game::defense() const {
     return d;
 }
 
-int Game::waveStrength() const {
+// 去掉 const 并改名：本方法推进随机序列，不应伪装成“查询”（P1 修复 mutable 缺陷）。
+// 注意：只做“去 const + 改名”，绝不改变 rng_ 的消耗时机与次数，
+// 否则单一随机流的后续结果会整体漂移，违反“行为零变化”红线。
+int Game::rollWaveStrength() {
     int s = static_cast<int>(TUNE.waveBase + turn_ * TUNE.wavePerTurn);
     s += static_cast<int>(rng_() % 7) - 3;
     return s < 5 ? 5 : s;
@@ -173,7 +176,21 @@ int Game::waveStrengthEstimate() const {
 }
 
 void Game::log(const std::string& s) {
-    log_.push_back(s);
+    LogEntry e;
+    e.turn = turn_;
+    e.code = ActCode::Text;
+    e.strings.push_back(s);
+    log_.push_back(std::move(e));
+    while (log_.size() > 400) log_.pop_front();
+}
+
+void Game::log(ActCode c, std::vector<long long> ints, std::vector<std::string> ss) {
+    LogEntry e;
+    e.turn = turn_;
+    e.code = c;
+    e.ints = std::move(ints);
+    e.strings = std::move(ss);
+    log_.push_back(std::move(e));
     while (log_.size() > 400) log_.pop_front();
 }
 
@@ -290,7 +307,7 @@ void Game::growPopulation() {
     while (popAcc_ >= need && pop_ < housing_) {
         popAcc_ -= need;
         ++pop_;
-        log("＋ 一名新殖民者诞生（人口 " + num(pop_) + "/" + num(housing_) + "）");
+        log(ActCode::PopBorn, {pop_, housing_}, {});
     }
     if (pop_ >= housing_) popAcc_ = 0;
 }
@@ -301,7 +318,7 @@ void Game::growPopulation() {
 
 TurnReport Game::evaluate() const {
     const WeatherDef& w = WDEF[static_cast<size_t>(weather_)];
-    const double moraleMul = TUNE.moraleBase + morale_ / TUNE.moraleDivisor;
+    const double moraleMul = moraleMultiplier();   // 单一事实来源，界面复用同一系数
     const double wm = w.metal * moraleMul;
     const double we = w.energy * moraleMul;
     const double wf = w.food * moraleMul;
@@ -403,15 +420,15 @@ bool Game::buildable(BType t, int x, int y, std::string* why) const {
     return true;
 }
 
-std::string Game::doBuild(const std::string& key, int x, int y) {
+ActionResult Game::doBuild(const std::string& key, int x, int y) {
     int idx = -1;
     for (int i = 0; i < BTYPE_COUNT; ++i)
         if (key == BDEF[static_cast<size_t>(i)].key || key == BDEF[static_cast<size_t>(i)].name) idx = i;
-    if (idx < 0) return "未知建筑类型：" + key + "（输入 list 查看）";
+    if (idx < 0) return {false, ActCode::BuildUnknownType, {key}};
     BType t = static_cast<BType>(idx);
 
     std::string why;
-    if (!buildable(t, x, y, &why)) return "无法建造：" + why;
+    if (!buildable(t, x, y, &why)) return {false, ActCode::BuildBlocked, {why}};
 
     const BDef& d = def(t);
     res_.metal -= d.costMetal;
@@ -430,16 +447,16 @@ std::string Game::doBuild(const std::string& key, int x, int y) {
     priority_.push_back(b.id);
     recomputeWorkers();
 
-    std::string msg = "开始建造 " + std::string(d.name) + " #" + num(b.id) + " 于 (" + num(x) + "," + num(y) + ")";
-    if (d.buildTurns > 0) msg += "，需 " + num(d.buildTurns) + " 周期";
-    log(msg);
-    return msg;
+    const bool hasTurns = d.buildTurns > 0;
+    log(ActCode::BuildStarted, {b.id, x, y, d.buildTurns, hasTurns ? 1 : 0}, {d.name});
+    return {true, ActCode::BuildStarted,
+            {d.name, num(b.id), num(x), num(y), num(d.buildTurns), hasTurns ? "1" : "0"}};
 }
 
-std::string Game::doDemolish(int id) {
+ActionResult Game::doDemolish(int id) {
     const Building* bp = building(id);
-    if (!bp) return "无效的建筑编号 #" + num(id);
-    if (bp->type == BType::HQ) return "指挥中心无法拆除";
+    if (!bp) return {false, ActCode::DemolishInvalid, {num(id)}};
+    if (bp->type == BType::HQ) return {false, ActCode::DemolishHQ, {}};
     BType t = bp->type;
     int x = bp->x, y = bp->y;
     Building& b = blds_[static_cast<size_t>(id)];
@@ -451,56 +468,52 @@ std::string Game::doDemolish(int id) {
     int back = d.costMetal / 2;
     res_.metal += back;
     recomputeWorkers();
-    std::string msg = "已拆除 " + std::string(d.name) + " #" + num(id) + "，回收金属 " + num(back);
-    log(msg);
-    return msg;
+    log(ActCode::DemolishDone, {id, back}, {d.name});
+    return {true, ActCode::DemolishDone, {d.name, num(id), num(back)}};
 }
 
-std::string Game::doToggle(int id) {
+ActionResult Game::doToggle(int id) {
     const Building* bp = building(id);
-    if (!bp) return "无效的建筑编号 #" + num(id);
+    if (!bp) return {false, ActCode::ToggleInvalid, {num(id)}};
     Building& b = blds_[static_cast<size_t>(id)];
     b.enabled = !b.enabled;
     recomputeWorkers();
-    std::string msg = std::string(def(b.type).name) + " #" + num(id) + (b.enabled ? " 已启用" : " 已关闭（停止耗能与产出）");
-    log(msg);
-    return msg;
+    log(ActCode::ToggleDone, {id, b.enabled ? 1 : 0}, {def(b.type).name});
+    return {true, ActCode::ToggleDone, {def(b.type).name, num(id), b.enabled ? "1" : "0"}};
 }
 
-std::string Game::doFocus(int id) {
+ActionResult Game::doFocus(int id) {
     const Building* bp = building(id);
-    if (!bp) return "无效的建筑编号 #" + num(id);
+    if (!bp) return {false, ActCode::FocusInvalid, {num(id)}};
     priority_.erase(std::remove(priority_.begin(), priority_.end(), id), priority_.end());
     priority_.insert(priority_.begin(), id);
     recomputeWorkers();
-    std::string msg = std::string(def(bp->type).name) + " #" + num(id) + " 已设为工人分配最优先";
-    log(msg);
-    return msg;
+    log(ActCode::FocusDone, {id}, {def(bp->type).name});
+    return {true, ActCode::FocusDone, {def(bp->type).name, num(id)}};
 }
 
-std::string Game::doResearch(const std::string& key) {
+ActionResult Game::doResearch(const std::string& key) {
     int idx = -1;
     for (int i = 0; i < TECH_COUNT; ++i)
         if (key == TDEF[static_cast<size_t>(i)].key || key == TDEF[static_cast<size_t>(i)].name) idx = i;
-    if (idx < 0) return "未知科技：" + key + "（输入 tech 查看）";
+    if (idx < 0) return {false, ActCode::ResearchUnknown, {key}};
     Tech t = static_cast<Tech>(idx);
     const TechDef& d = TDEF[static_cast<size_t>(idx)];
 
-    if (hasTech(t)) return std::string("已经研究过 ") + d.name;
+    if (hasTech(t)) return {false, ActCode::ResearchDup, {d.name}};
     for (int i = 0; i < TECH_COUNT; ++i) {
         if ((d.req & techBit(static_cast<Tech>(i))) && !hasTech(static_cast<Tech>(i)))
-            return std::string("前置科技不足，需要先研究：") + TDEF[static_cast<size_t>(i)].name;
+            return {false, ActCode::ResearchPrereq, {TDEF[static_cast<size_t>(i)].name}};
     }
     if (res_.science < d.cost)
-        return std::string("科研点不足：") + d.name + " 需要 " + num(d.cost) + "，当前 " + num(res_.science);
+        return {false, ActCode::ResearchNoScience, {d.name, num(d.cost), num(res_.science)}};
 
     res_.science -= d.cost;
     techs_ |= techBit(t);
     recomputeWorkers();
-    std::string msg = "★ 研究完成：" + std::string(d.name) + " —— " + d.desc;
-    log(msg);
-    if (t == Tech::GateTheory) log("星门理论已解锁：建造星门（build gate x y）即可撤离！");
-    return msg;
+    log(ActCode::ResearchDone, {}, {d.name, d.desc});
+    if (t == Tech::GateTheory) log(ActCode::GateTheoryUnlocked);
+    return {true, ActCode::ResearchDone, {d.name, d.desc}};
 }
 
 // =====================================================================
@@ -520,7 +533,7 @@ void Game::rollWeather() {
     weather_ = w;
     weatherLeft_ = 2 + static_cast<int>(rng_() % 3);
     if (w != Weather::Clear)
-        log("☁ 天气转入 " + std::string(WDEF[static_cast<size_t>(w)].name) + "：" + WDEF[static_cast<size_t>(w)].desc);
+        log(ActCode::WeatherChange, {}, {WDEF[static_cast<size_t>(w)].name, WDEF[static_cast<size_t>(w)].desc});
 }
 
 // =====================================================================
@@ -566,7 +579,7 @@ void Game::rollEvent() {
                      "拒绝降落（士气 -5）",
                      "征用他们的补给（+60 金属，士气 -10）"};
         pending_.push_back(e);
-        log("◇ 事件：难民船请求降落");
+        log(ActCode::EventRefugees);
         break;
     }
     case EV_MARKET: {
@@ -576,7 +589,7 @@ void Game::rollEvent() {
         e.text = "一个自称「自由商人」的家伙愿意和你做点交易。";
         e.options = {"用 80 金属换 90 科研点", "用 120 能源换 220 金属", "礼貌送客（士气 +2）"};
         pending_.push_back(e);
-        log("◇ 事件：黑市商人来访");
+        log(ActCode::EventMarket);
         break;
     }
     case EV_SIGNAL: {
@@ -586,7 +599,7 @@ void Game::rollEvent() {
         e.text = "深空传来一段规律信号，似乎来自行星背面的遗迹。";
         e.options = {"派队调查（50% 获得大量科研，50% 惊动虫群）", "忽略它（士气 +1）"};
         pending_.push_back(e);
-        log("◇ 事件：神秘信号");
+        log(ActCode::EventSignal);
         break;
     }
     case EV_LIFESUPPORT: {
@@ -596,7 +609,7 @@ void Game::rollEvent() {
         e.text = "居住区的空气循环系统出现故障，修复需要 60 金属。";
         e.options = {"花 60 金属紧急修复", "先凑合着用（-3 人口，士气 -6）"};
         pending_.push_back(e);
-        log("◇ 事件：维生系统故障");
+        log(ActCode::EventLifeSupport);
         break;
     }
     case EV_METEOR: {
@@ -609,10 +622,10 @@ void Game::rollEvent() {
             if (cands.empty()) break;
             int id = cands[rng_() % cands.size()];
             blds_[static_cast<size_t>(id)].damaged = 2 + static_cast<int>(rng_() % 3);
-            log("☄ 陨石击中了 " + std::string(def(blds_[static_cast<size_t>(id)].type).name) + " #" + num(id) + "，停产数周期");
+            log(ActCode::EventMeteorHit, {id}, {def(blds_[static_cast<size_t>(id)].type).name});
             ++hits;
         }
-        if (!hits) log("☄ 陨石雨落在荒地上，没有损失");
+        if (!hits) log(ActCode::EventMeteorMiss);
         recomputeWorkers();
         break;
     }
@@ -624,10 +637,10 @@ void Game::rollEvent() {
             t.terrain = Terrain::Ore;
             t.richness = 3 + static_cast<int>(rng_() % 2);
             t.ore = 380 + t.richness * 160;
-            log("◈ 勘探队发现新矿脉，位于 (" + num(x) + "," + num(y) + ")！");
+            log(ActCode::EventProspectFound, {x, y}, {});
             return;
         }
-        log("◈ 勘探队一无所获");
+        log(ActCode::EventProspectNone);
         break;
     }
     case EV_VENT: {
@@ -636,38 +649,38 @@ void Game::rollEvent() {
             Tile& t = tiles_[static_cast<size_t>(y * MAP_W + x)];
             if (t.terrain != Terrain::Plain || t.building >= 0) continue;
             t.terrain = Terrain::Geo;
-            log("◈ 地表裂开，露出新的地热口 (" + num(x) + "," + num(y) + ")");
+            log(ActCode::EventVentFound, {x, y}, {});
             return;
         }
-        log("◈ 地热勘探没有结果");
+        log(ActCode::EventVentNone);
         break;
     }
     case EV_FESTIVAL: {
         int f = 30 + static_cast<int>(rng_() % 21);
         res_.food += f;
         morale_ = clampInt(morale_ + 8, 0, 100);
-        log("♪ 殖民地举办丰收节：食物 +" + num(f) + "，士气 +8");
+        log(ActCode::EventFestival, {f}, {});
         break;
     }
     case EV_CARAVAN: {
         int m = 60 + static_cast<int>(rng_() % 61);
         res_.metal += m;
-        log("⛟ 商队抵达，带来金属 +" + num(m));
+        log(ActCode::EventCaravan, {m}, {});
         break;
     }
     default: break;
     }
 }
 
-std::string Game::answer(int option) {
-    if (pending_.empty()) return "当前没有待处理事件";
+ActionResult Game::answer(int option) {
+    if (pending_.empty()) return {false, ActCode::AnswerNone, {}};
     PendingEvent e = pending_.front();
     if (option < 1 || option > static_cast<int>(e.options.size()))
-        return "无效选项，请输入 1-" + num(static_cast<int>(e.options.size()));
+        return {false, ActCode::AnswerInvalid, {num(static_cast<int>(e.options.size()))}};
     pending_.pop_front();
 
-    std::string msg = "选择：" + e.options[static_cast<size_t>(option - 1)];
-    log("▶ " + msg);
+    const std::string chosen = e.options[static_cast<size_t>(option - 1)];
+    log(ActCode::LogChoice, {}, {chosen});
 
     switch (e.kind) {
     case EV_REFUGEES:
@@ -676,12 +689,11 @@ std::string Game::answer(int option) {
                 res_.food -= e.b;
                 pop_ += e.a;
                 recomputeWorkers();
-                log("难民已安置，人口 +" + num(e.a) + "，食物 -" + num(e.b));
+                log(ActCode::RefugeesSettled, {e.a, e.b}, {});
                 if (pop_ > housing_)
-                    log("！人口超编 " + num(pop_ - housing_) + " 人（上限 " + num(housing_) +
-                        "）：每周期扣士气并可能流失人口，尽快建造居住舱");
+                    log(ActCode::OvercrowdWarn, {pop_ - housing_, housing_}, {});
             } else {
-                log("食物不足，难民无法全部安置，只接收了一部分");
+                log(ActCode::RefugeesPartial);
                 res_.food = 0;
                 pop_ += std::max(1, e.a / 2);
                 morale_ = clampInt(morale_ - 4, 0, 100);
@@ -689,23 +701,23 @@ std::string Game::answer(int option) {
             }
         } else if (option == 2) {
             morale_ = clampInt(morale_ - 5, 0, 100);
-            log("运输船离开了，殖民地内气氛低落（士气 -5）");
+            log(ActCode::RefugeesRefused);
         } else {
             res_.metal += 60;
             morale_ = clampInt(morale_ - 10, 0, 100);
-            log("补给被征用：金属 +60，士气 -10");
+            log(ActCode::RefugeesSeized);
         }
         break;
     case EV_MARKET:
         if (option == 1) {
-            if (res_.metal < 80) { log("金属不足，商人耸耸肩走了"); morale_ = clampInt(morale_ - 2, 0, 100); }
-            else { res_.metal -= 80; res_.science += 90; log("交易完成：金属 -80，科研 +90"); }
+            if (res_.metal < 80) { log(ActCode::MarketNoMetal); morale_ = clampInt(morale_ - 2, 0, 100); }
+            else { res_.metal -= 80; res_.science += 90; log(ActCode::MarketTradeMetal); }
         } else if (option == 2) {
-            if (res_.energy < 120) { log("能源不足，商人耸耸肩走了"); morale_ = clampInt(morale_ - 2, 0, 100); }
-            else { res_.energy -= 120; res_.metal += 220; log("交易完成：能源 -120，金属 +220"); }
+            if (res_.energy < 120) { log(ActCode::MarketNoEnergy); morale_ = clampInt(morale_ - 2, 0, 100); }
+            else { res_.energy -= 120; res_.metal += 220; log(ActCode::MarketTradeEnergy); }
         } else {
             morale_ = clampInt(morale_ + 2, 0, 100);
-            log("商人满意地离开了（士气 +2）");
+            log(ActCode::MarketLeave);
         }
         break;
     case EV_SIGNAL:
@@ -713,32 +725,32 @@ std::string Game::answer(int option) {
             if (rng_() % 2 == 0) {
                 int s = 90 + static_cast<int>(rng_() % 61);
                 res_.science += s;
-                log("调查成功！遗迹中的数据库带来科研 +" + num(s));
+                log(ActCode::SignalSuccess, {s}, {});
             } else {
-                log("遗迹里是虫巢！虫群被惊动，提前发动攻击！");
-                applyCombat(waveStrength() + 12);
+                log(ActCode::SignalSwarm);
+                applyCombat(rollWaveStrength() + 12);
             }
         } else {
             morale_ = clampInt(morale_ + 1, 0, 100);
-            log("殖民地决定专注于眼前的工作");
+            log(ActCode::SignalIgnore);
         }
         break;
     case EV_LIFESUPPORT:
         if (option == 1) {
-            if (res_.metal >= e.a) { res_.metal -= e.a; log("维生系统修复完成（金属 -" + num(e.a) + "）"); }
-            else { log("金属不足，只能临时修补"); pop_ = std::max(0, pop_ - 1); morale_ = clampInt(morale_ - 3, 0, 100); recomputeWorkers(); }
+            if (res_.metal >= e.a) { res_.metal -= e.a; log(ActCode::LifeSupportFixed, {e.a}, {}); }
+            else { log(ActCode::LifeSupportPoor); pop_ = std::max(0, pop_ - 1); morale_ = clampInt(morale_ - 3, 0, 100); recomputeWorkers(); }
         } else {
             pop_ = std::max(0, pop_ - 3);
             morale_ = clampInt(morale_ - 6, 0, 100);
             recomputeWorkers();
-            log("维生系统带病运转，3 名殖民者没能挺过来");
+            log(ActCode::LifeSupportFail);
         }
         break;
     default:
         break;
     }
     checkEnd();
-    return msg;
+    return {true, ActCode::AnswerChoice, {chosen}};
 }
 
 // =====================================================================
@@ -747,12 +759,12 @@ std::string Game::answer(int option) {
 
 void Game::applyCombat(int strength) {
     int defv = defense();
-    log("☣ 虫潮来袭！入侵强度 " + num(strength) + "，殖民地防御 " + num(defv));
+    log(ActCode::WaveIncoming, {strength, defv}, {});
 
     if (defv >= strength) {
         morale_ = clampInt(morale_ + 3, 0, 100);
         res_.metal += 15;
-        log("✔ 防线击退了虫群，回收残骸金属 +15（士气 +3）");
+        log(ActCode::WaveRepelled);
         return;
     }
 
@@ -775,13 +787,12 @@ void Game::applyCombat(int strength) {
         if (cands.empty()) break;
         int id = cands[rng_() % cands.size()];
         blds_[static_cast<size_t>(id)].damaged = 2 + static_cast<int>(rng_() % 3);
-        log("✖ " + std::string(def(blds_[static_cast<size_t>(id)].type).name) + " #" + num(id) + " 被虫群破坏");
+        log(ActCode::BuildingDamaged, {id}, {def(blds_[static_cast<size_t>(id)].type).name});
         ++hit;
     }
     int loot = res_.metal / 10;
     res_.metal = std::max(0, res_.metal - loot);
-    log("✖ 防线被突破：-" + num(loss) + " 人口，-" + num(loot) + " 金属，士气 -8" +
-        (hit ? "" : "（虫群只破坏了空地）"));
+    log(ActCode::WaveBreached, {loss, loot, hit ? 1 : 0}, {});
     recomputeWorkers();
 }
 
@@ -792,7 +803,7 @@ void Game::applyCombat(int strength) {
 void Game::advanceTurn() {
     if (over_) return;
 
-    log("── 周期 " + num(turn_) + " 结算 ──");
+    log(ActCode::TurnHeader, {turn_}, {});
 
     // 1) 天气
     if (--weatherLeft_ <= 0) rollWeather();
@@ -800,7 +811,7 @@ void Game::advanceTurn() {
     // 2) 修复受损建筑
     for (Building& b : blds_)
         if (b.alive && b.damaged > 0) {
-            if (--b.damaged == 0) log("🔧 " + std::string(def(b.type).name) + " #" + num(b.id) + " 修复完毕，恢复运转");
+            if (--b.damaged == 0) log(ActCode::Repaired, {b.id}, {def(b.type).name});
         }
 
     // 3) 生产与消耗
@@ -810,7 +821,7 @@ void Game::advanceTurn() {
     res_.energy  = satAdd(res_.energy,  report_.energyNet);
     res_.science = satAdd(res_.science, report_.scienceNet);
 
-    if (report_.brownout) log("⚠ 能源透支：本期有耗能设施只能半负荷运转");
+    if (report_.brownout) log(ActCode::Brownout);
 
     // 食物允许为负（那是饥荒判据），所以这里只防溢出、不夹 0
     const long long foodRaw = static_cast<long long>(res_.food) + static_cast<long long>(report_.foodNet);
@@ -826,7 +837,7 @@ void Game::advanceTurn() {
         if (loss < 1) loss = 1;
         pop_ = std::max(0, pop_ - loss);
         morale_ = clampInt(morale_ - TUNE.starveMoraleDrop, 0, 100);
-        log("⚠ 食物短缺：饿死 " + num(loss) + " 名殖民者，士气 -7");
+        log(ActCode::Starve, {loss}, {});
     } else {
         res_.food = food;
     }
@@ -838,12 +849,12 @@ void Game::advanceTurn() {
         if (assigned_[static_cast<size_t>(b.id)] <= 0) continue;
         Tile& t = tiles_[static_cast<size_t>(b.y * MAP_W + b.x)];
         if (t.terrain != Terrain::Ore || t.ore <= 0) continue;
-        t.ore -= t.richness * 4;
+        t.ore -= t.richness * MINE_DEPLETION_PER_RICH;
         if (t.ore <= 0) {
             t.ore = 0;
             t.richness = 0;
             t.terrain = Terrain::Plain;
-            log("◇ 矿脉枯竭：钻矿场 #" + num(b.id) + " 停产，可拆除回收");
+            log(ActCode::OreDepleted, {b.id}, {});
         }
     }
 
@@ -851,7 +862,7 @@ void Game::advanceTurn() {
     for (Building& b : blds_) {
         if (!b.alive || b.buildLeft <= 0) continue;
         if (--b.buildLeft == 0) {
-            log("✔ " + std::string(def(b.type).name) + " #" + num(b.id) + " 建造完成");
+            log(ActCode::BuildingBuilt, {b.id}, {def(b.type).name});
             if (b.type == BType::Gate) {
                 won_ = true;
                 over_ = true;
@@ -868,7 +879,7 @@ void Game::advanceTurn() {
         const int chance = std::min(90, TUNE.overcrowdRisk * over);
         if (static_cast<int>(rng_() % 100) < chance) {
             --pop_;
-            log("⚠ 居住空间超编 " + num(over) + " 人：卫生条件恶化，1 名殖民者离开了殖民地");
+            log(ActCode::OvercrowdLeft, {over}, {});
         }
         recomputeWorkers();
     }
@@ -890,7 +901,7 @@ void Game::advanceTurn() {
         if (!cands.empty()) {
             int id = cands[rng_() % cands.size()];
             blds_[static_cast<size_t>(id)].damaged = 1 + static_cast<int>(rng_() % 3);
-            log("☂ 酸雨腐蚀了 " + std::string(def(blds_[static_cast<size_t>(id)].type).name) + " #" + num(id));
+            log(ActCode::AcidRain, {id}, {def(blds_[static_cast<size_t>(id)].type).name});
             recomputeWorkers();
         }
     }
@@ -898,7 +909,7 @@ void Game::advanceTurn() {
     // 9) 虫潮
     if (waveIn_ > 0) --waveIn_;
     if (waveIn_ == 0) {
-        applyCombat(waveStrength());
+        applyCombat(rollWaveStrength());
         waveIn_ = std::max(6, TUNE.waveInterval - turn_ / 40);
     }
 
@@ -937,6 +948,8 @@ std::string Game::saveTo(const std::string& path) const {
     std::ofstream f(path);
     if (!f) return "无法写入文件：" + path;
     f << "STARCOLONY 1\n";
+    f << "schema_version 1\n";   // P1 追加段：读档端对未知段静默忽略
+    f << "content_version 1\n";  // P1 追加段：内容版本（建筑/科技/事件外置后用）
     f << "name " << name_ << "\n";
     f << "state " << turn_ << ' ' << pop_ << ' ' << morale_ << ' ' << std::setprecision(17) << popAcc_
       << std::setprecision(6) << ' ' << techs_ << ' '
@@ -955,7 +968,7 @@ std::string Game::saveTo(const std::string& path) const {
     for (int id : priority_) f << ' ' << id;
     f << "\n";
     f << "log " << log_.size() << "\n";
-    for (const std::string& m : log_) f << m << "\n";
+    for (const LogEntry& e : log_) f << e.text() << "\n";
     f << "pending " << pending_.size() << "\n";
     for (const PendingEvent& p : pending_) {
         f << p.kind << ' ' << p.a << ' ' << p.b << ' ' << p.c << ' ' << p.options.size() << "\n";
@@ -1052,7 +1065,11 @@ bool Game::readFile(const std::string& path, std::string& err) {
             for (size_t i = 0; i < n && !bad; ++i) {
                 std::string m;
                 if (!std::getline(f, m)) { badLine("log 内容缺失"); break; }
-                log_.push_back(trim(m));
+                LogEntry le;
+                le.turn = turn_;
+                le.code = ActCode::Text;   // 存档只保存渲染后的文本，读回即视为原始文本条目
+                le.strings.push_back(trim(m));
+                log_.push_back(std::move(le));
             }
         } else if (tag == "pending") {
             size_t n = 0;
@@ -1180,6 +1197,78 @@ std::string Game::loadFrom(const std::string& path) {
 }
 
 // =====================================================================
+//  全值快照（供前端 / RPC；const 且不消耗随机数）
+// =====================================================================
+
+GameSnapshot Game::snapshot() const {
+    GameSnapshot s;
+    s.turn = turn_;
+    s.metal = res_.metal;
+    s.energy = res_.energy;
+    s.food = res_.food;
+    s.science = res_.science;
+    s.pop = pop_;
+    s.housing = housing_;
+    s.morale = morale_;
+    s.weather = static_cast<int>(weather_);
+    s.weatherLeft = weatherLeft_;
+    s.waveIn = waveIn_;
+    s.waveStrengthEstimate = waveStrengthEstimate();   // 纯公式，不碰 rng_
+    s.defense = defense();
+    s.metalIn = report_.metalIn;
+    s.energyIn = report_.energyIn;
+    s.foodIn = report_.foodIn;
+    s.scienceIn = report_.scienceIn;
+    s.energyUp = report_.energyUp;
+    s.foodUp = report_.foodUp;
+    s.metalNet = report_.metalNet;
+    s.energyNet = report_.energyNet;
+    s.foodNet = report_.foodNet;
+    s.scienceNet = report_.scienceNet;
+    s.brownout = report_.brownout;
+    s.starving = report_.starving;
+    s.over = over_;
+    s.won = won_;
+    s.endReason = endReason_;
+    s.colonyName = name_;
+
+    s.buildings.reserve(blds_.size());
+    for (const Building& b : blds_) {
+        BuildingView v;
+        v.id = b.id;
+        v.type = static_cast<int>(b.type);
+        v.typeKey = BDEF[static_cast<size_t>(b.type)].key;
+        v.x = b.x;
+        v.y = b.y;
+        v.buildLeft = b.buildLeft;
+        v.damaged = b.damaged;
+        v.enabled = b.enabled;
+        v.alive = b.alive;
+        v.assigned = (b.id >= 0 && b.id < static_cast<int>(assigned_.size()))
+                         ? assigned_[static_cast<size_t>(b.id)] : 0;
+        s.buildings.push_back(v);
+    }
+
+    s.tiles.reserve(static_cast<size_t>(MAP_W) * MAP_H);
+    for (const Tile& t : tiles_) {
+        TileView v;
+        v.terrain = static_cast<int>(t.terrain);
+        v.ore = t.ore;
+        v.richness = t.richness;
+        v.building = t.building;
+        s.tiles.push_back(v);
+    }
+
+    s.log.assign(log_.begin(), log_.end());
+
+    for (int i = 0; i < TECH_COUNT; ++i)
+        if (hasTech(static_cast<Tech>(i))) s.techs.push_back(TDEF[static_cast<size_t>(i)].key);
+
+    s.assigned = assigned_;
+    return s;
+}
+
+// =====================================================================
 //  新游戏
 // =====================================================================
 
@@ -1231,9 +1320,9 @@ void Game::newGame(uint32_t seed, const std::string& colonyName) {
     recomputeWorkers();
     report_ = evaluate();
 
-    log("殖民地「" + name_ + "」在未知行星着陆，周期 1 开始。");
-    log("目标：在 " + num(TUNE.maxTurns) + " 周期内建成星门，完成撤离。");
-    log("输入 help 查看命令；直接回车（或 next）推进一个周期。");
+    log(ActCode::NewGameText, {}, {name_});
+    log(ActCode::GoalText, {TUNE.maxTurns}, {});
+    log(ActCode::HintText);
 }
 
 } // namespace sc

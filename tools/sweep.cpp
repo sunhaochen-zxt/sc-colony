@@ -68,12 +68,12 @@ struct RunResult {
 };
 
 // 取 marker 之后新增的日志（marker 为上一检查点最后一条「── 周期 N 结算 ──」）
-std::vector<std::string> entriesAfter(const std::deque<std::string>& lg, const std::string& marker) {
+std::vector<std::string> entriesAfter(const std::deque<LogEntry>& lg, const std::string& marker) {
     size_t cut = 0;
     bool   found = false;
     if (!marker.empty()) {
         for (size_t i = lg.size(); i-- > 0;) {
-            if (lg[i] == marker) { cut = i + 1; found = true; break; }
+            if (std::string(lg[i]) == marker) { cut = i + 1; found = true; break; }
         }
     }
     if (!marker.empty() && !found) {           // 日志被截断的兜底：只扫最后 25 条，避免重复计数
@@ -81,13 +81,15 @@ std::vector<std::string> entriesAfter(const std::deque<std::string>& lg, const s
     }
     std::vector<std::string> out;
     out.reserve(lg.size() - cut);
-    for (size_t i = cut; i < lg.size(); ++i) out.push_back(lg[i]);
+    for (size_t i = cut; i < lg.size(); ++i) out.push_back(std::string(lg[i]));
     return out;
 }
 
-std::string newestMarker(const std::deque<std::string>& lg) {
-    for (size_t i = lg.size(); i-- > 0;)
-        if (lg[i].rfind("── 周期 ", 0) == 0) return lg[i];
+std::string newestMarker(const std::deque<LogEntry>& lg) {
+    for (size_t i = lg.size(); i-- > 0;) {
+        std::string s = lg[i];
+        if (s.rfind("── 周期 ", 0) == 0) return s;
+    }
     return "";
 }
 

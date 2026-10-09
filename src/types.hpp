@@ -21,6 +21,9 @@ inline constexpr int MAP_W = 18;
 inline constexpr int MAP_H = 12;
 inline constexpr int MAX_TURNS = 90;
 
+// ---------- 规则常量 ----------
+inline constexpr int MINE_DEPLETION_PER_RICH = 4;  // 钻矿场每周期按丰度开采的矿量
+
 // ---------- 终端颜色索引 ----------
 enum Col : int {
     COL_DEF = 0,   // 默认

@@ -63,6 +63,7 @@ bool parseInt(const std::string& s, int& out) {
 }
 
 std::vector<std::string> helpLines() {
+    const BDef& gate = BDEF[static_cast<size_t>(BType::Gate)];   // 单一事实来源：星门造价来自 BDEF
     return {
         "命令一览（输入命令后回车；直接回车 = 推进一个周期）",
         "",
@@ -90,7 +91,8 @@ std::vector<std::string> helpLines() {
         "            hab/居住舱 lab/研究所 clinic/医疗站 turret/防御炮塔 gate/星门",
         "科技键：hydro autodrill fusion nanomed alloy atmo drone gate",
         "",
-        "胜利条件：研究「星门理论」后建成星门（需 420 金属 / 300 能源 / 8 工人 / 12 周期）。",
+        "胜利条件：研究「星门理论」后建成星门（需 " + num(gate.costMetal) + " 金属 / " + num(gate.costEnergy) +
+            " 能源 / " + num(gate.workers) + " 工人 / " + num(gate.buildTurns) + " 周期）。",
         "失败条件：人口归零，或撑过 " + num(TUNE.maxTurns) + " 周期仍未撤离。",
     };
 }
@@ -157,7 +159,7 @@ std::vector<std::string> statusLines(const Game& g) {
     v.push_back("  食物   " + num(r.food) + "   (" + sign(p.foodNet) + "/周期，人口消耗 " + num(p.foodUp) + ")");
     v.push_back("  科研   " + num(r.science) + "   (" + sign(p.scienceNet) + "/周期)");
     char mbuf[32];
-    std::snprintf(mbuf, sizeof mbuf, "%.2f", 0.75 + g.morale() / 200.0);
+    std::snprintf(mbuf, sizeof mbuf, "%.2f", g.moraleMultiplier());   // 士气系数来自引擎，避免规则重复
     v.push_back("  人口   " + num(g.pop()) + " / " + num(g.housing()) + "（闲置 " + num(g.idleWorkers()) +
                 "）   工人按建造顺序优先分配，用 focus <编号> 调整");
     if (g.pop() > g.housing())
@@ -228,7 +230,7 @@ std::vector<std::string> logLines(const Game& g) {
     v.push_back("完整消息记录（" + num(static_cast<int>(g.log().size())) + " 条，最早的在前）");
     v.push_back("");
     // 不截断：保留多少就显示多少（Game 内部日志上限 400 条）
-    for (const std::string& m : g.log()) v.push_back(m);
+    for (const LogEntry& m : g.log()) v.push_back(m.text());
     return v;
 }
 
@@ -249,9 +251,9 @@ std::vector<std::string> scanLines(const Game& g, int x, int y) {
     }
     v.push_back("地块 (" + num(x) + "," + num(y) + ")");
     v.push_back("  地形：" + std::string(tname));
-    if (t.terrain == Terrain::Ore) v.push_back("  矿量：" + num(t.ore) + "  丰度：" + num(t.richness) + "（每周期开采 " + num(t.richness * 4) + "）");
-    v.push_back("  相邻冰层：" + num(g.adjIce(x, y)) + "（农场每格 +2 食物）");
-    v.push_back("  相邻山脉：" + num(g.adjMountain(x, y)) + "（矿场每格 +2 金属，最多 +6）");
+    if (t.terrain == Terrain::Ore) v.push_back("  矿量：" + num(t.ore) + "  丰度：" + num(t.richness) + "（每周期开采 " + num(g.tileOreYield(x, y)) + "）");
+    v.push_back("  相邻冰层：" + num(g.adjIce(x, y)) + "（农场每格 +" + num(g.farmIceBonus()) + " 食物）");
+    v.push_back("  相邻山脉：" + num(g.adjMountain(x, y)) + "（矿场每格 +" + num(g.mineMountainBonus()) + " 金属，最多 +" + num(g.mineMountainCap()) + "）");
     if (t.building >= 0) {
         const Building* b = g.building(t.building);
         if (b) v.push_back("  建筑：#" + num(b->id) + " " + BDEF[static_cast<size_t>(b->type)].name);

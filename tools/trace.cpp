@@ -41,8 +41,8 @@ int main(int argc, char** argv) {
                         g.turn(), g.res().metal, g.res().energy, g.res().food, g.res().science,
                         g.pop(), g.housing(), g.morale(), g.defense(), g.waveIn(),
                         static_cast<int>(g.buildings().size()));
-            const std::deque<std::string>& lg = g.log();
-            for (size_t i = lastLog; i < lg.size(); ++i) std::printf("        %s\n", lg[i].c_str());
+            const std::deque<LogEntry>& lg = g.log();
+            for (size_t i = lastLog; i < lg.size(); ++i) std::printf("        %s\n", lg[i].text().c_str());
             lastLog = lg.size();
         }
     }
