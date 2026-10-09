@@ -137,34 +137,56 @@ def test_cli_save_bytes_match_baseline():
     blobs = {}
     # 关键：两次必须用**同一个**存档路径——CLI 会把 "save <path>" 命令连同路径写进存档日志，
     # 若路径不同，存档字节必然不同（这是我上一版的测试 bug，不是产品回归）。
+    # 同样不用 unlink 清档（沙箱会把 os.unlink 劫持成 safe-delete 而抛 OSError）：
+    # 写哨兵占位，既避免删除，又保证读到的是本次刚写出的存档。
     savepath = QA_TMP / "p1reg_shared.sav"
     for tag, binary in (("base", BASELINE_CLI), ("cur", cur)):
-        if savepath.exists():
-            savepath.unlink()
+        sentinel = _arm_savepath(savepath)
         script = f"save {savepath}\nquit\n"
         subprocess.run([str(binary), "--seed", "20240101", "--no-color"],
                        input=script.encode("utf-8"), cwd=str(ROOT), env=env,
                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
         assert savepath.exists(), f"{tag} 未生成存档"
-        blobs[tag] = savepath.read_bytes()
+        raw = savepath.read_bytes()
+        assert raw != sentinel, f"{tag} 未真正写出存档（仍是哨兵内容）"
+        blobs[tag] = raw
     assert blobs["cur"] == blobs["base"], "CLI 存档字节与 22af9bb 基线不一致"
 
 
 # =====================================================================
 #  CLI 交互会话逐字节对照（P2 §4.4.1 配套红线 + 说明）
 # =====================================================================
+# 刻意**不使用 unlink** 清存档：本沙箱会把 os.unlink 劫持成 safe-delete（移入 ~/.Trash-0），
+# 在该目录不可写时抛 OSError，使「存档字节逐字节对照」这条红线随机变红。
+# 改为写入哨兵内容，既不依赖删除，又能确保读到的一定是本次 CLI 刚写出的存档（而非陈旧文件）。
+_SENTINEL = b"QA-SENTINEL-NOT-A-REAL-SAVE\n"
+
+
+def _arm_savepath(savepath):
+    """把存档路径占位成哨兵，返回哨兵字节。"""
+    if savepath is None:
+        return None
+    savepath.write_bytes(_SENTINEL)
+    return _SENTINEL
+
+
 def _cli(binary, seed, script, env, savepath=None):
     """驱动一次完整 CLI 会话；返回 (stdout_bytes, save_bytes|None)。
 
     关键：两次对照必须传入**同一个** savepath —— CLI 会把 "save <path>" 命令连同
     路径写进存档日志；路径不同存档字节必然不同（这是测试陷阱，不是产品差异）。
     """
-    if savepath is not None and savepath.exists():
-        savepath.unlink()
+    sentinel = _arm_savepath(savepath)
     p = subprocess.run([str(binary), "--seed", str(seed), "--no-color"],
                        input=script.encode("utf-8"), cwd=str(ROOT), env=env,
                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
-    data = savepath.read_bytes() if (savepath is not None and savepath.exists()) else None
+    data = None
+    if savepath is not None and savepath.exists():
+        raw = savepath.read_bytes()
+        assert raw != sentinel, (
+            f"{savepath} 仍是哨兵内容——本次 CLI 没能真正写出存档，"
+            f"不能拿陈旧/缺失文件去做逐字节对比")
+        data = raw
     return p.stdout, data
 
 

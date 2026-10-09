@@ -1404,6 +1404,36 @@ class TestH_Shutdown:
         code = c.wait_exit(timeout=5.0)
         assert code == 0, f"shutdown 后进程未在 5s 内以 0 退出（实际 {code}）"
 
+    @pytest.mark.parametrize("mode", ["pipe-eof", "devnull"], ids=["管道立即EOF", os.devnull])
+    def test_exits_cleanly_on_stdin_eof(self, mode):
+        """stdin 关闭/EOF 时必须**正常退出 0**，不得挂死、也不得吐出任何 stdout。
+
+        回归用例：曾出现 stdin EOF 让进程挂住的缺陷——前端以非交互方式拉起子进程
+        （重定向、CI、`</dev/null`）时必现，且表现为「进程永远不退出、也不报错」。
+        """
+        devnull = None
+        try:
+            if mode == "devnull":
+                devnull = open(os.devnull, "rb")
+                stdin, close_it = devnull, False
+            else:
+                stdin, close_it = subprocess.PIPE, True
+            proc = subprocess.Popen(_rpc_argv(), stdin=stdin, stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE, cwd=str(ROOT))
+        finally:
+            if devnull is not None:
+                devnull.close()      # 子进程已持有自己的 fd 描述
+        if close_it:
+            proc.stdin.close()       # 立即 EOF
+        try:
+            rc = proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+            pytest.fail(f"stdin {mode} 后服务端未在 10s 内退出（挂死）")
+        assert rc == 0, f"stdin {mode} 后退出码应为 0，实际 {rc}"
+        assert proc.stdout.read() == b"", f"stdin {mode} 后不应有任何 stdout 输出"
+
 
 # ===========================================================================
 #  I. 回归：CLI 未被破坏
