@@ -26,6 +26,7 @@
 //   build/sweep --list-params            # 列出可扫描的参数名
 #include "ai.hpp"
 #include "game.hpp"
+#include "content.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -354,6 +355,7 @@ void usage() {
 } // namespace
 
 int main(int argc, char** argv) {
+    if (!ensureContent()) return 1;   // P3a：内容未加载成功则拒绝启动
     int  nseeds = 128;
     uint32_t seed0 = 1;
     bool csv = false, scan = false, quiet = false;

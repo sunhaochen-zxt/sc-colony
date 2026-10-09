@@ -21,6 +21,7 @@
 // 编译：
 //   g++ -std=c++20 -O2 -Wall -Wextra -Isrc src/rpc_server.cpp src/game.cpp -o build/starcolony-rpc
 #include "game.hpp"
+#include "content.hpp"
 #include "rpc_json.hpp"
 #include "types.hpp"
 
@@ -625,6 +626,7 @@ bool isBlank(const std::string& s) {
 
 int main(int argc, char** argv) {
     using namespace sc;
+    if (!ensureContent()) return 1;   // P3a：内容未加载成功则拒绝启动
 
     uint32_t    seed = static_cast<uint32_t>(std::time(nullptr));
     std::string name = "新曙光";

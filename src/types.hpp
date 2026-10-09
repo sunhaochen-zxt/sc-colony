@@ -86,7 +86,9 @@ struct BDef {
     const char* desc;
 };
 
-extern const std::array<BDef, BTYPE_COUNT> BDEF;
+// P3a：定义改为运行时从 content/ 加载填充（见 src/content.cpp），故不是 const。
+// 所有既有调用点（只读）保持不变。
+extern std::array<BDef, BTYPE_COUNT> BDEF;
 
 // ---------- 科技 ----------
 enum class Tech : int {
@@ -112,7 +114,8 @@ struct TechDef {
     const char* desc;
 };
 
-extern const std::array<TechDef, TECH_COUNT> TDEF;
+// P3a：定义改为运行时从 content/ 加载填充，故不是 const。
+extern std::array<TechDef, TECH_COUNT> TDEF;
 
 // ---------- 天气 ----------
 enum class Weather : int {
@@ -136,7 +139,8 @@ struct WeatherDef {
     const char* desc;
 };
 
-extern const std::array<WeatherDef, WEATHER_COUNT> WDEF;
+// P3a：定义改为运行时从 content/ 加载填充，故不是 const。
+extern std::array<WeatherDef, WEATHER_COUNT> WDEF;
 
 // ---------- 平衡性可调参数 ----------
 // 默认值就是正式数值；把这组参数抽出来是为了让 tools/sweep.cpp 之类的平衡性工具

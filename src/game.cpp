@@ -20,44 +20,21 @@
 
 namespace sc {
 
-Tuning TUNE;
-
 // =====================================================================
-//  静态数据表
+//  运行时数据表（P3a：内容外置）
+//
+//  这里只保留**定义**（同名的 extern 声明在 src/types.hpp）。数值不再硬编码，
+//  而是启动时由 src/content.cpp 从 content/base/*.json 加载并填入：
+//  BDEF ← buildings.json、TDEF ← techs.json、WDEF ← weathers.json、TUNE ← tuning.json。
+//  每条程序在使用 Game 之前必须调用 sc::ensureContent()（见各 main）。
+//  内部表示（枚举下标）与存档格式均保持不变（P3a 红线）。
+//  字符串由 content.cpp 的稳定存储持有，这里只存指针。
 // =====================================================================
 
-const std::array<BDef, BTYPE_COUNT> BDEF = {{
-    // key    name          glyph  color        M    E    S  建 工 耗 可重复  说明
-    {"hq",   "指挥中心",   'C', COL_BLUE,      0,   0,   0,  0, 2, 2, false, "殖民地核心：+4 能源 +1 科研，提供 8 人口上限"},
-    {"sol",  "太阳能板",   'S', COL_YELLOW,   40,   0,   0,  2, 1, 0, true,  "产出 6 能源/周期，沙暴与寒潮时效率骤降"},
-    {"geo",  "地热站",     'G', COL_MAGENTA,  90,  10,   0,  4, 2, 1, true,  "只能建在地热口，产出 18 能源/周期，全天候"},
-    {"mine", "钻矿场",     'M', COL_GREY,     60,  10,   0,  3, 3, 3, true,  "只能建在矿脉上，开采金属；矿脉会枯竭"},
-    {"farm", "水培农场",   'F', COL_GREEN,    50,  15,   0,  3, 2, 2, true,  "产出 12 食物/周期，相邻冰层每格 +2"},
-    {"hab",  "居住舱",     'H', COL_WHITE,    60,  15,   0,  2, 1, 0, true,  "提供 6 人口上限（大气处理科技后 +8）"},
-    {"lab",  "研究所",     'L', COL_CYAN,     70,  20,   0,  4, 3, 4, true,  "产出 6 科研/周期，是科技线的核心"},
-    {"clinic","医疗站",    'K', COL_GREEN,    90,  25,   0,  3, 2, 3, true,  "加快人口增长，减少虫潮与饥荒的伤亡"},
-    {"turret","防御炮塔",  'T', COL_RED,      80,  25,   0,  3, 1, 2, true,  "提供 16 防御力（军用合金后 28）"},
-    {"gate", "星门",       'X', COL_BWHITE,  420, 300,   0, 12, 8,12, false, "终极工程：建成即撤离成功（需星门理论）"},
-}};
-
-const std::array<TechDef, TECH_COUNT> TDEF = {{
-    {"hydro",     "水培改良",    35, 0,                                              "农场食物产出 +50%"},
-    {"autodrill", "自动钻机",    50, 0,                                              "矿场金属产出 +40%"},
-    {"fusion",    "聚变核心",    70, 0,                                              "太阳能板与地热站产出 +50%"},
-    {"nanomed",   "医疗纳米",    80, 0,                                              "人口增长加快，饥荒与伤亡减 1"},
-    {"alloy",     "军用合金",    90, 0,                                              "炮塔防御力 +80%"},
-    {"atmo",      "大气处理",   110, techBit(Tech::Hydro),                            "食物消耗 -20%，居住舱 +2 人口上限"},
-    {"drone",     "无人机网络", 130, techBit(Tech::AutoDrill),                        "所有建筑所需工人 -1（至少 1）"},
-    {"gate",      "星门理论",   170, techBit(Tech::Fusion) | techBit(Tech::Atmo),     "解锁星门工程"},
-}};
-
-const std::array<WeatherDef, WEATHER_COUNT> WDEF = {{
-    {"晴朗",  COL_GREEN,   1.00, 1.00, 1.00, 1.00, "无修正"},
-    {"沙暴",  COL_YELLOW,  0.90, 0.50, 0.80, 1.00, "遮天蔽日：能源 -50%"},
-    {"寒潮",  COL_CYAN,    1.00, 0.80, 0.70, 0.90, "低温：食物 -30%，能源 -20%"},
-    {"耀斑",  COL_MAGENTA, 1.10, 1.30, 0.80, 0.80, "辐射暴涨：能源 +30%，科研 -20%"},
-    {"酸雨",  COL_GREEN,   0.90, 1.00, 0.90, 1.00, "腐蚀设备：有小概率损坏建筑"},
-}};
+Tuning                                TUNE;
+std::array<BDef, BTYPE_COUNT>         BDEF{};
+std::array<TechDef, TECH_COUNT>       TDEF{};
+std::array<WeatherDef, WEATHER_COUNT> WDEF{};
 
 namespace {
 

@@ -16,6 +16,7 @@
 //   g++ -std=c++20 -g -fsanitize=address,undefined -Isrc tests/protocol_tests.cpp src/game.cpp -o build/protocol_tests_asan
 // main() 返回非 0 表示发现失败。
 #include "game.hpp"
+#include "content.hpp"
 #include "ai.hpp"
 
 #include <climits>
@@ -806,8 +807,186 @@ static void testPreviewBuildPurity() {
 }
 
 // =====================================================================
+//  [K] P3a：内容外置 —— 加载 / 校验 / 落地
+// =====================================================================
+
+static bool strContains(const std::string& hay, const std::string& needle) {
+    return hay.find(needle) != std::string::npos;
+}
+static std::string joinErrs(const std::vector<std::string>& e) {
+    std::string r;
+    for (const std::string& x : e) { r += x; r += "\n"; }
+    return r;
+}
+// 复制真实内容包到独立目录（便于注入坏内容而不污染仓库）
+static std::string copyBaseTo(const std::string& name) {
+    const std::string dir = tmpdir() + "/" + name;
+    ::mkdir(dir.c_str(), 0777);
+    const char* files[] = {"manifest.json", "buildings.json", "techs.json",
+                           "weathers.json", "tuning.json"};
+    for (const char* fn : files) {
+        writeAll(dir + "/" + fn, readAll(std::string("content/base/") + fn));
+    }
+    return dir;
+}
+// 对目录内某文件做一次文本替换（替换首处）
+static void patchFile(const std::string& dir, const std::string& fn,
+                      const std::string& from, const std::string& to) {
+    const std::string p = dir + "/" + fn;
+    std::string s = readAll(p);
+    const size_t pos = s.find(from);
+    if (pos != std::string::npos) s.replace(pos, from.size(), to);
+    writeAll(p, s);
+}
+
+static void testContentValidation() {
+    std::printf("[K] 内容外置：加载 / 校验 / 落地（P3a）\n");
+
+    // --- 真实内容包：加载 + 校验通过，值转写正确 ---
+    {
+        ContentPack pack;
+        std::vector<std::string> errs;
+        check(loadContentPack("content/base", pack, errs), "真实内容包加载 + 校验通过");
+        check(pack.schema == 1 && pack.packId == "base", "manifest.schema/pack_id 正确");
+        check(std::string(pack.buildings[0].key) == "hq" &&
+                  std::string(pack.buildings[0].name) == "指挥中心",
+              "buildings[0] = hq 指挥中心");
+        check(pack.buildings[9].costMetal == 420 && pack.buildings[9].costEnergy == 300 &&
+                  std::string(pack.buildings[9].key) == "gate",
+              "buildings[9] = 星门 造价 420/300");
+        check(pack.buildings[1].costMetal == 40 && pack.buildings[1].workers == 1,
+              "buildings[1] = 太阳能板 造价 40、1 工人");
+        check(std::string(pack.techs[5].key) == "atmo" && pack.techs[5].cost == 110 &&
+                  pack.techs[5].req == (1u << 0),
+              "techs[5] = atmo 造价 110，前置位掩码 = hydro(位0)");
+        check(pack.techs[7].req == ((1u << 2) | (1u << 5)),
+              "techs[7] = 星门理论，前置 = fusion(位2) | atmo(位5)");
+        check(std::string(pack.weathers[0].name) == "晴朗" && pack.weathers[0].energy == 1.0,
+              "weathers[0] = 晴朗 倍率 1.0");
+        check(std::string(pack.weathers[1].name) == "沙暴" && pack.weathers[1].energy == 0.5,
+              "weathers[1] = 沙暴 能源 0.5");
+        check(pack.tuning.startMetal == 240 && pack.tuning.maxTurns == 90 &&
+                  pack.tuning.foodPerPop == 1.15 && pack.tuning.clinicMitigationCap == 1,
+              "tuning 关键字段（含后加入的 foodPerPop/clinicMitigationCap）正确");
+    }
+
+    // --- 全局表已由内容填充，且与 pack 一致 ---
+    {
+        check(std::string(BDEF[BType::HQ < BType::COUNT ? static_cast<size_t>(BType::HQ) : 0].key) == "hq",
+              "全局 BDEF 已被内容填充（BDEF[0].key == hq）");
+        check(std::string(TDEF[5].key) == "atmo" && TDEF[5].req == (1u << 0),
+              "全局 TDEF 已被内容填充（atmo 前置 = hydro）");
+        check(std::string(WDEF[1].name) == "沙暴" && WDEF[1].energy == 0.5,
+              "全局 WDEF 已被内容填充");
+        check(TUNE.startMetal == 240 && TUNE.maxTurns == 90 && TUNE.wavePerTurn == 0.8,
+              "全局 TUNE 已被内容填充");
+    }
+
+    // --- 六类错误：各自给出可定位信息 ---
+    std::vector<std::string> errs;
+
+    // (1) 缺字段
+    {
+        const std::string dir = copyBaseTo("cv_missing");
+        patchFile(dir, "tuning.json", "\"startMetal\": 240,", "");
+        errs.clear();
+        ContentPack p;
+        check(!loadContentPack(dir, p, errs), "缺字段：拒绝加载");
+        check(strContains(joinErrs(errs), "缺少必填字段") && strContains(joinErrs(errs), "startMetal"),
+              "缺字段：报 \"startMetal\" 缺少必填字段");
+    }
+    // (2) 类型不符
+    {
+        const std::string dir = copyBaseTo("cv_type");
+        patchFile(dir, "tuning.json", "\"maxTurns\": 90,", "\"maxTurns\": 90.0,");
+        errs.clear();
+        ContentPack p;
+        check(!loadContentPack(dir, p, errs), "类型不符：拒绝加载");
+        check(strContains(joinErrs(errs), "maxTurns") && strContains(joinErrs(errs), "期望整数"),
+              "类型不符：整数字段给浮点被拒（maxTurns 期望整数）");
+    }
+    // (3) 未知 key（科技 requires）
+    {
+        const std::string dir = copyBaseTo("cv_unknownkey");
+        patchFile(dir, "techs.json", "\"requires\": [\"hydro\"]", "\"requires\": [\"atmoo\"]");
+        errs.clear();
+        ContentPack p;
+        check(!loadContentPack(dir, p, errs), "未知科技 key：拒绝加载");
+        const std::string all = joinErrs(errs);
+        check(strContains(all, "未知科技 key \"atmoo\"") && strContains(all, "是否想写 \"atmo\""),
+              "未知科技 key：给出 \"是否想写 atmo？\" 提示");
+    }
+    // (4) 数组长度不符
+    {
+        const std::string dir = copyBaseTo("cv_length");
+        writeAll(dir + "/weathers.json", "[]");
+        errs.clear();
+        ContentPack p;
+        check(!loadContentPack(dir, p, errs), "数组长度不符：拒绝加载");
+        check(strContains(joinErrs(errs), "数组长度") && strContains(joinErrs(errs), "期望 5"),
+              "数组长度不符：报实际长度 != 期望 5");
+    }
+    // (5) 科技成环
+    {
+        const std::string dir = copyBaseTo("cv_cycle");
+        patchFile(dir, "techs.json", "\"requires\": [],", "\"requires\": [\"gate\"],");
+        errs.clear();
+        ContentPack p;
+        check(!loadContentPack(dir, p, errs), "科技成环：拒绝加载");
+        check(strContains(joinErrs(errs), "成环"), "科技成环：报 \"前置科技成环\"");
+    }
+    // (6) 拼错字段名
+    {
+        const std::string dir = copyBaseTo("cv_typo");
+        patchFile(dir, "tuning.json", "\"foodPerPop\":", "\"foodPerpop\":");
+        errs.clear();
+        ContentPack p;
+        check(!loadContentPack(dir, p, errs), "拼错字段名：拒绝加载");
+        const std::string all = joinErrs(errs);
+        check(strContains(all, "未知字段") && strContains(all, "是否想写 \"foodPerPop\""),
+              "拼错字段名：给出 \"是否想写 foodPerPop？\" 提示");
+    }
+
+    // --- 一次报告全部错误（不是逐个失败） ---
+    {
+        const std::string dir = copyBaseTo("cv_multi");
+        patchFile(dir, "tuning.json", "\"startMetal\": 240,", "");
+        patchFile(dir, "tuning.json", "\"startEnergy\": 90,", "");
+        errs.clear();
+        ContentPack p;
+        check(!loadContentPack(dir, p, errs), "多个错误：拒绝加载");
+        check(errs.size() >= 2, "一次报告全部错误（>=2 条）");
+    }
+
+    // --- 半初始化保护：initContent 失败不得改动全局表 ---
+    {
+        const std::string dir = copyBaseTo("cv_halfinit");
+        patchFile(dir, "buildings.json", "\"cost\": { \"metal\": 40,", "\"cost\": { \"metal\": \"x\",");
+        const int beforeMetal = TUNE.startMetal;
+        const std::string beforeHq = std::string(BDEF[0].key);
+        errs.clear();
+        check(!initContent(dir, errs), "坏内容：initContent 返回 false");
+        check(TUNE.startMetal == beforeMetal, "半初始化保护：TUNE 未被改动");
+        check(std::string(BDEF[0].key) == beforeHq, "半初始化保护：BDEF 未被改动");
+    }
+
+    // --- 验收 #1：改一处 JSON 数值，不重编译即生效，可还原 ---
+    {
+        const std::string dir = copyBaseTo("cv_live");
+        patchFile(dir, "tuning.json", "\"startMetal\": 240,", "\"startMetal\": 999,");
+        errs.clear();
+        check(initContent(dir, errs) && TUNE.startMetal == 999,
+              "改 tuning.json 的 startMetal=999 立即生效（未重编译）");
+        errs.clear();
+        check(initContent("content/base", errs) && TUNE.startMetal == 240,
+              "还原 content/base 后 startMetal 回到 240");
+    }
+}
+
+// =====================================================================
 
 int main() {
+    if (!ensureContent()) return 1;   // P3a：内容未加载成功则拒绝启动
     std::printf("==== P1 协议化重构 · 独立验收测试 (tests/protocol_tests.cpp) ====\n");
 
     testCompatibilityLayer();
@@ -822,6 +1001,7 @@ int main() {
     testNewSnapshotFields();
     testPreviewBuildRules();
     testPreviewBuildPurity();
+    testContentValidation();
 
     std::printf("==== 共 %d 项检查，失败 %d 项 ====\n", g_checks, g_fail);
     return g_fail ? 1 : 0;

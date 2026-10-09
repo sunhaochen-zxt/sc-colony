@@ -19,6 +19,7 @@
 // 重定向到 /dev/null，因此主进程自身不会产生 sanitizer 报告；子进程是否崩溃/逻辑失败
 // 由父进程通过 waitpid 状态判定。main() 返回非 0 表示发现失败/缺陷。
 #include "game.hpp"
+#include "content.hpp"
 #include "ai.hpp"
 
 #include <algorithm>
@@ -845,6 +846,7 @@ static void testPendingBlocksCore() {
 
 // =====================================================================
 int main() {
+    if (!ensureContent()) return 1;   // P3a：内容未加载成功则拒绝启动
     std::printf("=== 星际争霸：殖民地 对抗性边界测试 (task-2) ===\n");
     std::printf("构建时间: %s %s（被测源码修订哈希见 docs/QA_REPORT.md）\n\n", __DATE__, __TIME__);
 

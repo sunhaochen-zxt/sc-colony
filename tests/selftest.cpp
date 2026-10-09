@@ -10,6 +10,7 @@
 
 // 星际争霸：殖民地 —— 无头自检：规则不变量 + 存档往返 + AI 试玩平衡性
 #include "game.hpp"
+#include "content.hpp"
 #include "ai.hpp"
 
 #include <algorithm>
@@ -118,6 +119,7 @@ void compareState(const Game& a, const Game& b, const std::string& tag) {
 } // namespace
 
 int main() {
+    if (!ensureContent()) return 1;   // P3a：内容未加载成功则拒绝启动
     std::printf("=== 星际争霸：殖民地 自检 ===\n\n");
 
     // ---------- 1. 地图生成 ----------

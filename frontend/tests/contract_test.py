@@ -42,6 +42,12 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 BUILD = ROOT / "build"
 SRC = ROOT / "src"
+# P3a 起内容外置：BDEF/TDEF/WDEF/Tuning 的「源」不再是 game.cpp 字面量，而是 content/base/*.json
+# （其正确性已由 content_transcription_check.py 对 git 22af9bb 独立核对过）。
+CONTENT = ROOT / "content" / "base"
+# 契约 §4：color 用名字与 Col 枚举序对应（与 content_transcription_check 保持一致）
+COLOR_NAMES = ["default", "grey", "red", "green", "yellow",
+               "blue", "magenta", "cyan", "white", "bright_white"]
 DEFAULT_RPC = BUILD / "starcolony-rpc"
 CLI_BIN = BUILD / "starcolony"
 BASELINE_CLI = BUILD / "qa_tmp" / "starcolony_baseline"
@@ -446,33 +452,36 @@ def parse_col_enum():
     return vals
 
 
-_BDEF_RE = re.compile(
-    r'\{\s*"([^"]*)"\s*,\s*"([^"]*)"\s*,\s*\'(.)\'\s*,\s*(COL_\w+)\s*,'
-    r"\s*(-?\d+)\s*,\s*(-?\d+)\s*,\s*(-?\d+)\s*,\s*(-?\d+)\s*,\s*(-?\d+)\s*,\s*(-?\d+)\s*,"
-    r'\s*(true|false)\s*,\s*"([^"]*)"\s*\}'
-)
+def _color_index(name):
+    """契约 color 名 -> Col 枚举序号（content_info 里 color 就是该序号）。"""
+    if name not in COLOR_NAMES:
+        raise AssertionError(f"未知 color 名：{name!r}")
+    return COLOR_NAMES.index(name)
+
+
+def _load_content(fname):
+    """读取 content/base/<fname>（P3a：内容已外置，是这些表的唯一源）。"""
+    p = CONTENT / fname
+    assert p.exists(), f"内容文件缺失：{p}（P3a：内容已外置到 content/base）"
+    return json.loads(p.read_text(encoding="utf-8"))
 
 
 def parse_bdef():
-    text = _read_src("game.cpp")
-    block = text.split("BDEF = {{", 1)[1].split("}};", 1)[0]
+    """P3a：BDEF 的源是 content/base/buildings.json（字段名对齐 content_info）。"""
     rows = []
-    for m in _BDEF_RE.finditer(block):
-        k, name, glyph, col, M, E, Sc, bt, wk, up, rep, desc = m.groups()
+    for g in _load_content("buildings.json"):
+        cost = g["cost"]
         rows.append(
             dict(
-                key=k, name=name, glyph=glyph, color=col,
-                costMetal=int(M), costEnergy=int(E), costScience=int(Sc),
-                buildTurns=int(bt), workers=int(wk), upkeep=int(up),
-                repeatable=(rep == "true"), desc=desc,
+                key=g["key"], name=g["name"], glyph=g["glyph"],
+                color=_color_index(g["color"]),
+                costMetal=cost["metal"], costEnergy=cost["energy"],
+                costScience=cost["science"],
+                buildTurns=g["build_turns"], workers=g["workers"], upkeep=g["upkeep"],
+                repeatable=g["repeatable"], desc=g["desc"],
             )
         )
     return rows
-
-
-_TDEF_RE = re.compile(
-    r'\{\s*"([^"]*)"\s*,\s*"([^"]*)"\s*,\s*(-?\d+)\s*,\s*([^,]+?)\s*,\s*"([^"]*)"\s*\}'
-)
 
 
 def parse_tech_enum():
@@ -488,37 +497,20 @@ def parse_tech_enum():
 
 
 def parse_tdef():
-    text = _read_src("game.cpp")
-    block = text.split("TDEF = {{", 1)[1].split("}};", 1)[0]
-    raw = []
-    for m in _TDEF_RE.finditer(block):
-        k, name, cost, req, desc = m.groups()
-        raw.append((k, name, int(cost), re.findall(r"Tech::(\w+)", req), desc))
-    # 契约里的 req 是科技 key（小写，如 "fusion"），而源码写的是 C++ 枚举名（Tech::Fusion）。
-    # TDEF 与 Tech 枚举同序，据此做 枚举名 -> key 的映射。
-    enum_names = parse_tech_enum()
-    name_to_key = {enum_names[i]: raw[i][0] for i in range(min(len(enum_names), len(raw)))}
-    rows = []
-    for k, name, cost, req_enums, desc in raw:
-        rows.append(dict(key=k, name=name, cost=cost,
-                         req=[name_to_key.get(e, e) for e in req_enums], desc=desc))
-    return rows
-
-
-_WDEF_RE = re.compile(
-    r'\{\s*"([^"]*)"\s*,\s*(COL_\w+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*,'
-    r'\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*"([^"]*)"\s*\}'
-)
+    """P3a：TDEF 的源是 content/base/techs.json（requires 已是 key 数组）。"""
+    return [dict(key=t["key"], name=t["name"], cost=t["cost"],
+                 req=list(t["requires"]), desc=t["desc"])
+            for t in _load_content("techs.json")]
 
 
 def parse_wdef():
-    text = _read_src("game.cpp")
-    block = text.split("WDEF = {{", 1)[1].split("}};", 1)[0]
+    """P3a：WDEF 的源是 content/base/weathers.json；color 映射为 Col 序号。"""
     rows = []
-    for m in _WDEF_RE.finditer(block):
-        name, col, metal, energy, food, science, desc = m.groups()
-        rows.append(dict(name=name, color=col, metal=float(metal), energy=float(energy),
-                         food=float(food), science=float(science), desc=desc))
+    for g in _load_content("weathers.json"):
+        m = g["mult"]
+        rows.append(dict(name=g["name"], color=_color_index(g["color"]),
+                         metal=m["metal"], energy=m["energy"],
+                         food=m["food"], science=m["science"], desc=g["desc"]))
     return rows
 
 
@@ -625,7 +617,6 @@ class TestD_ContentInfo:
 
     def test_buildings_match_bdef(self, server):
         src = parse_bdef()
-        cols = parse_col_enum()
         got = {b["key"]: b for b in R(server.call("content_info"))["buildings"]}
         assert len(got) == len(src), f"buildings 条目数 {len(got)} != BDEF 条数 {len(src)}"
         required = {"key", "name", "glyph", "color", "costMetal", "costEnergy",
@@ -636,7 +627,7 @@ class TestD_ContentInfo:
             assert required <= set(g), f"{row['key']} 字段不全：{sorted(g)}"
             assert g["name"] == row["name"], f"{row['key']} name"
             assert str(g["glyph"]) == row["glyph"], f"{row['key']} glyph"
-            assert g["color"] == cols[row["color"]], f"{row['key']} color"
+            assert g["color"] == row["color"], f"{row['key']} color"
             for f in ("costMetal", "costEnergy", "costScience", "buildTurns", "workers", "upkeep"):
                 assert g[f] == row[f], f"{row['key']}.{f}: {g[f]} != 源码 {row[f]}"
             assert g["repeatable"] is row["repeatable"], f"{row['key']} repeatable"
@@ -679,13 +670,12 @@ class TestD_ContentInfo:
 
     def test_weathers_match_wdef(self, server):
         src = parse_wdef()
-        cols = parse_col_enum()
         got = {w["name"]: w for w in R(server.call("content_info"))["weathers"]}
         assert len(got) == len(src), f"weathers 条目数 {len(got)} != WDEF 条数 {len(src)}"
         for row in src:
             assert row["name"] in got, f"缺少天气 {row['name']}"
             g = got[row["name"]]
-            assert g["color"] == cols[row["color"]], f"{row['name']} color"
+            assert g["color"] == row["color"], f"{row['name']} color"
             for f in ("metal", "energy", "food", "science"):
                 assert abs(float(g[f]) - row[f]) < 1e-9, f"{row['name']}.{f}: {g[f]} != {row[f]}"
             assert g["desc"] == row["desc"], f"{row['name']} desc 与源码不一致"
@@ -1459,13 +1449,16 @@ CURRENT_CLI = BUILD / "qa_tmp" / "starcolony_current"
 
 def _ensure_current_cli():
     """从当前 src/ 编译一份 CLI，避免 build/starcolony 可能是旧产物。"""
-    srcs = [SRC / n for n in ("main.cpp", "ui.cpp", "game.cpp", "game.hpp", "types.hpp", "ui.hpp")]
+    # P3a：可执行文件都需链接 src/content.cpp（内容外置），并带 third_party（nlohmann/json）
+    srcs = [SRC / n for n in ("main.cpp", "ui.cpp", "game.cpp", "content.cpp",
+                              "game.hpp", "types.hpp", "ui.hpp", "content.hpp")]
     newest = max((p.stat().st_mtime for p in srcs if p.exists()), default=0)
     if not CURRENT_CLI.exists() or CURRENT_CLI.stat().st_mtime < newest:
         try:
             subprocess.run(
-                ["g++", "-std=c++20", "-O2", "-Wall", "-Wextra", "-Isrc",
-                 "src/main.cpp", "src/ui.cpp", "src/game.cpp", "-o", str(CURRENT_CLI)],
+                ["g++", "-std=c++20", "-O2", "-Wall", "-Wextra", "-Isrc", "-Ithird_party",
+                 "src/main.cpp", "src/ui.cpp", "src/game.cpp", "src/content.cpp",
+                 "-o", str(CURRENT_CLI)],
                 cwd=str(ROOT), check=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             )
         except (OSError, subprocess.CalledProcessError) as ex:

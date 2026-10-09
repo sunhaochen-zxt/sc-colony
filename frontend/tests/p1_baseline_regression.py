@@ -56,9 +56,13 @@ def _newest(paths) -> float:
 
 
 def _ensure(name, sources, extra_inc=()):
-    """从当前 src/ 编译一个 P1 工具到 build/qa_tmp/（带 mtime 缓存）。"""
+    """从当前 src/ 编译一个 P1 工具到 build/qa_tmp/（带 mtime 缓存）。
+
+    P3a 起核心内容外置：所有可执行文件都要链接 src/content.cpp 并带 third_party
+    （nlohmann/json）头路径——故这里统一加上。
+    """
     out = QA_TMP / name
-    incs = ["-Isrc"] + [f"-I{i}" for i in extra_inc]
+    incs = ["-Isrc", "-Ithird_party"] + [f"-I{i}" for i in extra_inc]
     if out.exists() and out.stat().st_mtime >= _newest(sources):
         return out
     cmd = ["g++", "-std=c++20", "-O2", "-Wall", "-Wextra", *incs,
@@ -80,22 +84,22 @@ def _run(binary, args=(), timeout=180) -> bytes:
 
 
 def _srcs_trace():
-    return [SRC / "game.cpp", SRC / "game.hpp", SRC / "types.hpp",
+    return [SRC / "game.cpp", SRC / "content.cpp", SRC / "game.hpp", SRC / "types.hpp",
             TOOLS / "trace.cpp", ROOT / "tests" / "ai.hpp"]
 
 
 def _srcs_sweep():
-    return [SRC / "game.cpp", SRC / "game.hpp", SRC / "types.hpp",
+    return [SRC / "game.cpp", SRC / "content.cpp", SRC / "game.hpp", SRC / "types.hpp",
             TOOLS / "sweep.cpp", ROOT / "tests" / "ai.hpp"]
 
 
 def _srcs_selftest():
-    return [SRC / "game.cpp", SRC / "game.hpp", SRC / "types.hpp",
+    return [SRC / "game.cpp", SRC / "content.cpp", SRC / "game.hpp", SRC / "types.hpp",
             ROOT / "tests" / "selftest.cpp"]
 
 
 def _srcs_cli():
-    return [SRC / "main.cpp", SRC / "ui.cpp", SRC / "game.cpp",
+    return [SRC / "main.cpp", SRC / "ui.cpp", SRC / "game.cpp", SRC / "content.cpp",
             SRC / "game.hpp", SRC / "ui.hpp", SRC / "types.hpp"]
 
 

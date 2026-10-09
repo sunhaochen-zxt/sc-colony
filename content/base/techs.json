@@ -1,0 +1,10 @@
+[
+  { "key": "hydro",     "name": "水培改良",   "cost": 35,  "requires": [],                 "desc": "农场食物产出 +50%" },
+  { "key": "autodrill", "name": "自动钻机",   "cost": 50,  "requires": [],                 "desc": "矿场金属产出 +40%" },
+  { "key": "fusion",    "name": "聚变核心",   "cost": 70,  "requires": [],                 "desc": "太阳能板与地热站产出 +50%" },
+  { "key": "nanomed",   "name": "医疗纳米",   "cost": 80,  "requires": [],                 "desc": "人口增长加快，饥荒与伤亡减 1" },
+  { "key": "alloy",     "name": "军用合金",   "cost": 90,  "requires": [],                 "desc": "炮塔防御力 +80%" },
+  { "key": "atmo",      "name": "大气处理",   "cost": 110, "requires": ["hydro"],          "desc": "食物消耗 -20%，居住舱 +2 人口上限" },
+  { "key": "drone",     "name": "无人机网络", "cost": 130, "requires": ["autodrill"],      "desc": "所有建筑所需工人 -1（至少 1）" },
+  { "key": "gate",      "name": "星门理论",   "cost": 170, "requires": ["fusion", "atmo"], "desc": "解锁星门工程" }
+]

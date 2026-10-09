@@ -1,0 +1,7 @@
+[
+  { "key": "clear",     "name": "晴朗", "color": "green",   "mult": { "metal": 1.00, "energy": 1.00, "food": 1.00, "science": 1.00 }, "desc": "无修正" },
+  { "key": "sandstorm", "name": "沙暴", "color": "yellow",  "mult": { "metal": 0.90, "energy": 0.50, "food": 0.80, "science": 1.00 }, "desc": "遮天蔽日：能源 -50%" },
+  { "key": "coldsnap",  "name": "寒潮", "color": "cyan",    "mult": { "metal": 1.00, "energy": 0.80, "food": 0.70, "science": 0.90 }, "desc": "低温：食物 -30%，能源 -20%" },
+  { "key": "flare",     "name": "耀斑", "color": "magenta", "mult": { "metal": 1.10, "energy": 1.30, "food": 0.80, "science": 0.80 }, "desc": "辐射暴涨：能源 +30%，科研 -20%" },
+  { "key": "acidrain",  "name": "酸雨", "color": "green",   "mult": { "metal": 0.90, "energy": 1.00, "food": 0.90, "science": 1.00 }, "desc": "腐蚀设备：有小概率损坏建筑" }
+]

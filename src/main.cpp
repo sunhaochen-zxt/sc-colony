@@ -10,6 +10,7 @@
 
 // 星际争霸：殖民地 —— 命令行入口与指令解析
 #include "game.hpp"
+#include "content.hpp"
 #include "ui.hpp"
 
 #include <algorithm>
@@ -276,6 +277,7 @@ std::vector<std::string> scanLines(const Game& g, int x, int y) {
 } // namespace
 
 int main(int argc, char** argv) {
+    if (!ensureContent()) return 1;   // P3a：内容未加载成功则拒绝启动
     uint32_t seed = static_cast<uint32_t>(std::time(nullptr));
     bool ansi = true;
     bool selftestUI = false;

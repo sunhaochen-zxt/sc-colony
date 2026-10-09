@@ -1,0 +1,122 @@
+[
+  {
+    "key": "hq",
+    "name": "指挥中心",
+    "glyph": "C",
+    "color": "blue",
+    "cost": { "metal": 0, "energy": 0, "science": 0 },
+    "build_turns": 0,
+    "workers": 2,
+    "upkeep": 2,
+    "repeatable": false,
+    "desc": "殖民地核心：+4 能源 +1 科研，提供 8 人口上限"
+  },
+  {
+    "key": "sol",
+    "name": "太阳能板",
+    "glyph": "S",
+    "color": "yellow",
+    "cost": { "metal": 40, "energy": 0, "science": 0 },
+    "build_turns": 2,
+    "workers": 1,
+    "upkeep": 0,
+    "repeatable": true,
+    "desc": "产出 6 能源/周期，沙暴与寒潮时效率骤降"
+  },
+  {
+    "key": "geo",
+    "name": "地热站",
+    "glyph": "G",
+    "color": "magenta",
+    "cost": { "metal": 90, "energy": 10, "science": 0 },
+    "build_turns": 4,
+    "workers": 2,
+    "upkeep": 1,
+    "repeatable": true,
+    "desc": "只能建在地热口，产出 18 能源/周期，全天候"
+  },
+  {
+    "key": "mine",
+    "name": "钻矿场",
+    "glyph": "M",
+    "color": "grey",
+    "cost": { "metal": 60, "energy": 10, "science": 0 },
+    "build_turns": 3,
+    "workers": 3,
+    "upkeep": 3,
+    "repeatable": true,
+    "desc": "只能建在矿脉上，开采金属；矿脉会枯竭"
+  },
+  {
+    "key": "farm",
+    "name": "水培农场",
+    "glyph": "F",
+    "color": "green",
+    "cost": { "metal": 50, "energy": 15, "science": 0 },
+    "build_turns": 3,
+    "workers": 2,
+    "upkeep": 2,
+    "repeatable": true,
+    "desc": "产出 12 食物/周期，相邻冰层每格 +2"
+  },
+  {
+    "key": "hab",
+    "name": "居住舱",
+    "glyph": "H",
+    "color": "white",
+    "cost": { "metal": 60, "energy": 15, "science": 0 },
+    "build_turns": 2,
+    "workers": 1,
+    "upkeep": 0,
+    "repeatable": true,
+    "desc": "提供 6 人口上限（大气处理科技后 +8）"
+  },
+  {
+    "key": "lab",
+    "name": "研究所",
+    "glyph": "L",
+    "color": "cyan",
+    "cost": { "metal": 70, "energy": 20, "science": 0 },
+    "build_turns": 4,
+    "workers": 3,
+    "upkeep": 4,
+    "repeatable": true,
+    "desc": "产出 6 科研/周期，是科技线的核心"
+  },
+  {
+    "key": "clinic",
+    "name": "医疗站",
+    "glyph": "K",
+    "color": "green",
+    "cost": { "metal": 90, "energy": 25, "science": 0 },
+    "build_turns": 3,
+    "workers": 2,
+    "upkeep": 3,
+    "repeatable": true,
+    "desc": "加快人口增长，减少虫潮与饥荒的伤亡"
+  },
+  {
+    "key": "turret",
+    "name": "防御炮塔",
+    "glyph": "T",
+    "color": "red",
+    "cost": { "metal": 80, "energy": 25, "science": 0 },
+    "build_turns": 3,
+    "workers": 1,
+    "upkeep": 2,
+    "repeatable": true,
+    "desc": "提供 16 防御力（军用合金后 28）"
+  },
+  {
+    "key": "gate",
+    "name": "星门",
+    "glyph": "X",
+    "color": "bright_white",
+    "cost": { "metal": 420, "energy": 300, "science": 0 },
+    "build_turns": 12,
+    "workers": 8,
+    "upkeep": 12,
+    "repeatable": false,
+    "desc": "终极工程：建成即撤离成功（需星门理论）"
+  }
+]

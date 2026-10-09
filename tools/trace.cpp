@@ -12,6 +12,7 @@
 // 用法：trace [seed] [--quiet]
 #include "ai.hpp"
 #include "game.hpp"
+#include "content.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -20,6 +21,7 @@
 using namespace sc;
 
 int main(int argc, char** argv) {
+    if (!ensureContent()) return 1;   // P3a：内容未加载成功则拒绝启动
     uint32_t seed = 42;
     bool quiet = false;
     for (int i = 1; i < argc; ++i) {

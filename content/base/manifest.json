@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "pack_id": "base",
+  "name": "基础内容包",
+  "files": {
+    "buildings": "buildings.json",
+    "techs": "techs.json",
+    "weathers": "weathers.json",
+    "tuning": "tuning.json"
+  }
+}
