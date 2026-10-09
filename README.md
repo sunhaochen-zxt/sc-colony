@@ -1,6 +1,7 @@
 # 星际争霸：殖民地 (Star Colony)
 
 > **许可**：GNU Affero 通用公共许可证 v3.0（AGPL-3.0），详见 [LICENSE](LICENSE)。
+> **仓库**：<https://github.com/sunhaochen-zxt/sc-colony>
 
 一款 C++20 编写的**命令行殖民地经营游戏**：在 18×12 的行星地图上，用 90 个周期管理金属 / 能源 / 食物 / 科研，应对天气、随机事件与周期性虫潮，最终研究出「星门理论」并建成星门，完成撤离。
 
