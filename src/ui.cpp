@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <iostream>
 #include <sstream>
 #include <sys/ioctl.h>
 #include <unistd.h>
@@ -254,9 +255,56 @@ std::string colorize(Col c, const std::string& s) {
     return std::string("\033[") + code(c) + "m" + s + "\033[0m";
 }
 
+void emitFrame(const std::string& frame) {
+    clearScreen();
+
+    const bool interactive = (isatty(STDOUT_FILENO) == 1) && (isatty(STDIN_FILENO) == 1);
+    std::vector<std::string> lines;
+    {
+        std::string cur;
+        for (char c : frame) {
+            if (c == '\n') { lines.push_back(cur); cur.clear(); }
+            else cur.push_back(c);
+        }
+        lines.push_back(cur);
+    }
+
+    const int rows = termSize().rows;
+    if (!interactive || static_cast<int>(lines.size()) <= std::max(6, rows - 1)) {
+        std::fputs(frame.c_str(), stdout);
+        std::fflush(stdout);
+        return;
+    }
+
+    const size_t per = static_cast<size_t>(std::max(5, rows - 2));
+    const size_t total = lines.size();
+    size_t i = 0;
+    while (i < total) {
+        const size_t end = std::min(total, i + per);
+        for (; i < end; ++i) {
+            std::fputs(lines[i].c_str(), stdout);
+            if (i + 1 < total) std::fputc('\n', stdout);
+        }
+        std::fflush(stdout);
+        if (i >= total) break;
+        std::printf("\n%s── 已显示 %zu/%zu 行，回车继续（q 回车一次性输出剩余）──%s",
+                    ansiEnabled() ? "\033[2m" : "", i, total, ansiEnabled() ? "\033[0m" : "");
+        std::fflush(stdout);
+        std::string s;
+        if (!std::getline(std::cin, s)) break;
+        if (!s.empty() && (s[0] == 'q' || s[0] == 'Q')) {
+            for (; i < total; ++i) {
+                std::fputs(lines[i].c_str(), stdout);
+                if (i + 1 < total) std::fputc('\n', stdout);
+            }
+            std::fflush(stdout);
+            break;
+        }
+    }
+    std::fflush(stdout);
+}
+
 std::string renderFrame(const Game& g, const std::string& prompt, const std::vector<std::string>& panel) {
-    TermSize ts = termSize();
-    const int budget = std::max(34, ts.rows - 1);
     const std::string bar(74, '=');
 
     std::vector<std::string> header;
@@ -290,19 +338,11 @@ std::string renderFrame(const Game& g, const std::string& prompt, const std::vec
     std::vector<std::string> msgs;
     for (const std::string& m : g.log()) msgs.push_back("  " + m);
 
-    // 预算分配优先级：信息面板（事件/报告）> 消息 > 建筑
-    int fixed = static_cast<int>(header.size()) + static_cast<int>(mapSec.size()) + 3;
-    int remaining = std::max(0, budget - fixed);
-    if (remaining < 0) remaining = 0;
-
-    int panN = 0;
-    if (!panel.empty()) {
-        panN = std::min<int>(static_cast<int>(panel.size()), std::min(11, std::max(0, remaining - 1)));
-        if (panN > 0) remaining -= (panN + 1);
-    }
-    int msgN = std::min<int>(static_cast<int>(msgs.size()), std::max(0, std::min(5, remaining - 1)));
-    if (msgN > 0) remaining -= (msgN + 1);
-    int bldN = std::min<int>(static_cast<int>(blds.size()), std::max(0, std::min(7, remaining - 1)));
+    // 不按终端高度截断：建筑 / 消息 / 信息面板一律完整输出。
+    // 放不下就让终端自己滚动，绝不用「…另有 N 项」把内容藏起来。
+    const int panN = static_cast<int>(panel.size());
+    const int msgN = static_cast<int>(msgs.size());
+    const int bldN = static_cast<int>(blds.size());
 
     std::ostringstream o;
     for (const std::string& s : header) o << s << "\n";
@@ -310,12 +350,7 @@ std::string renderFrame(const Game& g, const std::string& prompt, const std::vec
 
     if (bldN > 0) {
         o << sep("建筑 (" + std::to_string(blds.size()) + ")", 74) << "\n";
-        int shown = bldN;
-        if (static_cast<int>(blds.size()) > bldN) shown = std::max(0, bldN - 1);
-        for (int i = 0; i < shown; ++i) o << blds[static_cast<size_t>(i)] << "\n";
-        if (shown < static_cast<int>(blds.size()))
-            o << colorize(COL_GREY, "  … 另有 " + std::to_string(blds.size() - static_cast<size_t>(shown)) +
-                                       " 座建筑未显示（detail 查看全部）") << "\n";
+        for (int i = 0; i < bldN; ++i) o << blds[static_cast<size_t>(i)] << "\n";
     }
 
     if (msgN > 0) {
@@ -327,9 +362,6 @@ std::string renderFrame(const Game& g, const std::string& prompt, const std::vec
     if (!panel.empty()) {
         o << sep("信息", 74) << "\n";
         for (int i = 0; i < panN; ++i) o << "  " << panel[static_cast<size_t>(i)] << "\n";
-        if (panN < static_cast<int>(panel.size()))
-            o << colorize(COL_GREY, "  … 还有 " + std::to_string(panel.size() - static_cast<size_t>(panN)) +
-                                       " 行（缩小字号或加大窗口可看全）") << "\n";
     }
 
     if (g.over()) {

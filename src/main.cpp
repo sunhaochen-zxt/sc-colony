@@ -225,12 +225,10 @@ std::vector<std::string> detailLines(const Game& g) {
 
 std::vector<std::string> logLines(const Game& g) {
     std::vector<std::string> v;
-    v.push_back("最近消息");
+    v.push_back("完整消息记录（" + num(static_cast<int>(g.log().size())) + " 条，最早的在前）");
     v.push_back("");
-    const std::deque<std::string>& l = g.log();
-    int start = static_cast<int>(l.size()) - 30;
-    if (start < 0) start = 0;
-    for (int i = start; i < static_cast<int>(l.size()); ++i) v.push_back(l[static_cast<size_t>(i)]);
+    // 不截断：保留多少就显示多少（Game 内部日志上限 400 条）
+    for (const std::string& m : g.log()) v.push_back(m);
     return v;
 }
 
@@ -339,8 +337,7 @@ int main(int argc, char** argv) {
             prompt = "命令 > ";
         }
 
-        clearScreen();
-        std::cout << renderFrame(g, prompt, panel) << std::flush;
+        emitFrame(renderFrame(g, prompt, panel));
 
         std::string line;
         if (!std::getline(std::cin, line)) { std::cout << "\n"; break; }

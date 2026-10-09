@@ -34,4 +34,8 @@ std::string colorize(Col c, const std::string& s);
 // 生成整帧画面，末尾是提示符（不带换行），等待玩家输入
 std::string renderFrame(const Game& g, const std::string& prompt, const std::vector<std::string>& panel);
 
+// 输出整帧：内容一屏放得下就直接打印；放不下则分屏输出（回车翻页），
+// 保证任何一行都不会被丢弃（非交互环境直接全量输出，不做分页）
+void        emitFrame(const std::string& frame);
+
 } // namespace sc
